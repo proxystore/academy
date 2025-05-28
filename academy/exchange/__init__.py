@@ -13,38 +13,60 @@ else:  # pragma: <3.11 cover
     from typing_extensions import Self
 
 from academy.behavior import Behavior
-from academy.handle import UnboundRemoteHandle
+from academy.handle import BoundRemoteHandle, ClientRemoteHandle, UnboundRemoteHandle
 from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import Message
 
-__all__ = ['Exchange', 'ExchangeMixin']
+__all__ = ['UnboundExchangeClient', 'BoundExchangeClient', 'ExchangeMixin']
 
 BehaviorT = TypeVar('BehaviorT', bound=Behavior)
 
-
 @runtime_checkable
-class Exchange(Protocol):
+class UnboundExchangeClient(Protocol):
     """Message exchange client protocol.
 
     A message exchange hosts mailboxes for each entity (i.e., agent or
-    client) in a multi-agent system. This protocol defines the client
-    interface to an arbitrary exchange.
+    client) in a multi-agent system. With 
+    [`BoundExchangeClient`][academy.exchange.BoundExchangeClient], This
+    protocol defines the client interface to an arbitrary exchange.
+    An unbound exchange is used to attach to an existing mailbox or create
+    a new mailbox. No messages or commands can be sent till a client is
+    bound to a mailbox.
 
     Warning:
-        Exchange implementations should be efficiently pickleable so that
-        agents and remote clients can establish client connections to the
-        same exchange.
+        Unbound exchange implementations should be efficiently pickleable
+        so that agents and remote clients can establish client connections
+        to the same exchange.
     """
+    def bind(self, entity_id: EntityId) -> BoundExchangeClient:
+        ...
 
-    def close(self) -> None:
-        """Close the exchange client.
-
-        Note:
-            This does not alter the state of the exchange.
+    def register_and_bind(
+        self, 
+        behavior: type[BehaviorT] | None = None,
+        name: str | None = None,
+    ) -> tuple[EntityId, BoundExchangeClient]:
+        """
         """
         ...
+
+@runtime_checkable
+class BoundExchangeClient(Protocol):
+    """Message exchange client protocol.
+
+    A message exchange hosts mailboxes for each entity (i.e., agent or
+    client) in a multi-agent system. With 
+    [`UnboundExchangeClient`][academy.exchange.UnoundExchangeClient], This
+    protocol defines the client interface to an arbitrary exchange.
+
+    Warning:
+        BoundExchangeClient should not be replicated. Multiple clients
+        listening to the same mailbox will lead to undefined behavior
+        depending on the implementation of the exchange. Instead, clients
+        should be bound to a new mailbox to be replicated.
+    """
 
     def register_agent(
         self,
@@ -64,17 +86,6 @@ class Exchange(Protocol):
 
         Returns:
             Unique identifier for the agent's mailbox.
-        """
-        ...
-
-    def register_client(self, *, name: str | None = None) -> ClientId:
-        """Create a new client identifier and associated mailbox.
-
-        Args:
-            name: Optional human-readable name for the client.
-
-        Returns:
-            Unique identifier for the client's mailbox.
         """
         ...
 
@@ -110,7 +121,7 @@ class Exchange(Protocol):
     def get_handle(
         self,
         aid: AgentId[BehaviorT],
-    ) -> UnboundRemoteHandle[BehaviorT]:
+    ) -> BoundRemoteHandle[BehaviorT]:
         """Create a new handle to an agent.
 
         A handle enables a client to invoke actions on the agent.
@@ -132,20 +143,6 @@ class Exchange(Protocol):
         """
         ...
 
-    def get_mailbox(self, uid: EntityId) -> Mailbox:
-        """Get a client to a specific mailbox.
-
-        Args:
-            uid: EntityId of the mailbox.
-
-        Returns:
-            Mailbox client.
-
-        Raises:
-            BadEntityIdError: if a mailbox for `uid` does not exist.
-        """
-        ...
-
     def send(self, uid: EntityId, message: Message) -> None:
         """Send a message to a mailbox.
 
@@ -159,19 +156,56 @@ class Exchange(Protocol):
         """
         ...
 
+    @property
+    def mailbox_id(self) -> EntityId:
+        """Mailbox address/identifier."""
+        ...
+
+    def recv(self, timeout: float | None = None) -> Message:
+        """Receive the next message in the mailbox.
+
+        This blocks until the next message is received or the mailbox
+        is closed.
+
+        Args:
+            timeout: Optional timeout in seconds to wait for the next
+                message. If `None`, the default, block forever until the
+                next message or the mailbox is closed.
+
+        Raises:
+            MailboxClosedError: if the mailbox was closed.
+            TimeoutError: if a `timeout` was specified and exceeded.
+        """
+        ...
+
+    def close(self) -> None:
+        """Close the exchange client.
+
+        Stop listening for incoming messages.
+
+        Warning:
+            This does not close the mailbox in the exchange. I.e., the exchange
+            will still accept new messages to this mailbox, but this client
+            will no longer be listening for them.
+            This does not alter the state of the exchange.
+        """
+        ...
+
+    def clone(self) -> UnboundExchangeClient:
+        ...
 
 class ExchangeMixin:
     """Mixin class that adds basic methods to an exchange implementation.
 
     This adds a simple `repr`/`str`, context manager support, and the
-    `register_agent`, `register_client`, and `get_handle` methods.
+    `get_handle` method.
     """
 
-    def __enter__(self) -> Self:
+    def __enter__(self: BoundExchangeClient) -> Self:
         return self
 
     def __exit__(
-        self: Exchange,
+        self: BoundExchangeClient,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         exc_traceback: TracebackType | None,
@@ -185,9 +219,9 @@ class ExchangeMixin:
         return f'{type(self).__name__}<{id(self)}>'
 
     def get_handle(
-        self: Exchange,
+        self: BoundExchangeClient,
         aid: AgentId[BehaviorT],
-    ) -> UnboundRemoteHandle[BehaviorT]:
+    ) -> BoundRemoteHandle[BehaviorT]:
         """Create a new handle to an agent.
 
         A handle enables a client to invoke actions on the agent.
@@ -211,46 +245,4 @@ class ExchangeMixin:
                 f'Handle must be created from an {AgentId.__name__} '
                 f'but got identifier with type {type(aid).__name__}.',
             )
-        return UnboundRemoteHandle(self, aid)
-
-
-@runtime_checkable
-class Mailbox(Protocol):
-    """Client protocol that listens to incoming messages to a mailbox."""
-
-    @property
-    def exchange(self) -> Exchange:
-        """Exchange client."""
-        ...
-
-    @property
-    def mailbox_id(self) -> EntityId:
-        """Mailbox address/identifier."""
-        ...
-
-    def close(self) -> None:
-        """Close this mailbox client.
-
-        Warning:
-            This does not close the mailbox in the exchange. I.e., the exchange
-            will still accept new messages to this mailbox, but this client
-            will no longer be listening for them.
-        """
-        ...
-
-    def recv(self, timeout: float | None = None) -> Message:
-        """Receive the next message in the mailbox.
-
-        This blocks until the next message is received or the mailbox
-        is closed.
-
-        Args:
-            timeout: Optional timeout in seconds to wait for the next
-                message. If `None`, the default, block forever until the
-                next message or the mailbox is closed.
-
-        Raises:
-            MailboxClosedError: if the mailbox was closed.
-            TimeoutError: if a `timeout` was specified and exceeded.
-        """
-        ...
+        return BoundRemoteHandle(self, aid, self.mailbox_id)
