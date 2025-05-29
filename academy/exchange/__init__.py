@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import sys
 from types import TracebackType
-from typing import Any
+from typing import Any, Callable, get_args
 from typing import Protocol
 from typing import runtime_checkable
 from typing import TypeVar
+import uuid
+
+from academy.agent import Agent
+from academy.exception import MailboxClosedError
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     from typing import Self
@@ -17,7 +21,7 @@ from academy.handle import BoundRemoteHandle, ClientRemoteHandle, UnboundRemoteH
 from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.identifier import EntityId
-from academy.message import Message
+from academy.message import Message, RequestMessage, ResponseMessage
 
 __all__ = ['UnboundExchangeClient', 'BoundExchangeClient', 'ExchangeMixin']
 
@@ -40,17 +44,21 @@ class UnboundExchangeClient(Protocol):
         so that agents and remote clients can establish client connections
         to the same exchange.
     """
-    def bind(self, entity_id: EntityId) -> BoundExchangeClient:
+    def bind(self, 
+             agent: Agent[BehaviorT] | None
+        ) -> BoundExchangeClient:
         ...
+        """Bind exchange to client or agent.
 
-    def register_and_bind(
-        self, 
-        behavior: type[BehaviorT] | None = None,
-        name: str | None = None,
-    ) -> tuple[EntityId, BoundExchangeClient]:
+        If no agent is provided, exchange should create a new mailbox without
+        an associated behavior and bind to that. Otherwise, the exchange will 
+        bind to the mailbox associated with the provided agent.
+
+        Note:
+            This is intentionally restrictive. Each user or agent should only
+            bind to the exchange with a single address. This forces multiplexing
+            of handles to other agents and requests to this agents.
         """
-        """
-        ...
 
 @runtime_checkable
 class BoundExchangeClient(Protocol):
@@ -58,7 +66,7 @@ class BoundExchangeClient(Protocol):
 
     A message exchange hosts mailboxes for each entity (i.e., agent or
     client) in a multi-agent system. With 
-    [`UnboundExchangeClient`][academy.exchange.UnoundExchangeClient], This
+    [`UnboundExchangeClient`][academy.exchange.UnboundExchangeClient], This
     protocol defines the client interface to an arbitrary exchange.
 
     Warning:
@@ -67,6 +75,16 @@ class BoundExchangeClient(Protocol):
         depending on the implementation of the exchange. Instead, clients
         should be bound to a new mailbox to be replicated.
     """
+
+    @property
+    def mailbox_id(self) -> EntityId:
+        """Mailbox address/identifier."""
+        ...
+    
+    @property
+    def bound_handles(self) -> dict[uuid.UUID, BoundRemoteHandle[Any]]:
+        """All handles bound to this exchange"""
+        ...
 
     def register_agent(
         self,
@@ -156,11 +174,6 @@ class BoundExchangeClient(Protocol):
         """
         ...
 
-    @property
-    def mailbox_id(self) -> EntityId:
-        """Mailbox address/identifier."""
-        ...
-
     def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
 
@@ -245,4 +258,51 @@ class ExchangeMixin:
                 f'Handle must be created from an {AgentId.__name__} '
                 f'but got identifier with type {type(aid).__name__}.',
             )
-        return BoundRemoteHandle(self, aid, self.mailbox_id)
+        
+        hdl = BoundRemoteHandle(self, aid, self.mailbox_id)
+        self.bound_handles[hdl.handle_id] = hdl
+        return hdl
+    
+    def _handle_request(self, request: RequestMessage) -> None:
+        response = request.error(
+            TypeError(
+                f'Client with {self.mailbox_id} cannot fulfill requests.',
+            ),
+        )
+        self.exchange.send(response.dest, response)
+    
+    def _message_handler(self, message: Message) -> None:
+        if isinstance(message, get_args(RequestMessage)):
+            self._handle_request(message)
+        elif isinstance(message, get_args(ResponseMessage)):
+            try:
+                handle = self.bound_handles[message.label]
+            except KeyError:
+                pass
+            else:
+                handle._process_response(message)
+        else:
+            raise AssertionError('Unreachable.')
+        
+    def listen(self: BoundExchangeClient) -> None:
+        """Listen for new messages in the mailbox and process them.
+
+        Request messages are processed via the `request_handler`, and response
+        messages are dispatched to the handle that created the corresponding
+        request.
+
+        Warning:
+            This method loops forever, until the mailbox is closed. Thus this
+            method is typically run inside of a thread.
+
+        Note:
+            Response messages intended for a handle that does not exist
+            will be logged and discarded.
+        """
+
+        try:
+            while True:
+                message = self.recv()
+                self._message_handler(message)
+        except MailboxClosedError:
+            pass
