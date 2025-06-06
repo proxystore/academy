@@ -5,7 +5,7 @@ import time
 import pytest
 
 from academy.exception import BadEntityIdError
-from academy.exchange.thread import ThreadExchange
+from academy.exchange.thread import UnboundThreadExchangeClient
 from academy.launcher import ThreadLauncher
 from academy.manager import Manager
 from academy.message import PingRequest
@@ -18,7 +18,7 @@ from testing.constant import TEST_THREAD_JOIN_TIMEOUT
 
 def test_protocol() -> None:
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         assert isinstance(repr(manager), str)
@@ -28,7 +28,7 @@ def test_protocol() -> None:
 def test_basic_usage() -> None:
     behavior = SleepBehavior(TEST_LOOP_SLEEP)
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         manager.launch(behavior)
@@ -38,23 +38,25 @@ def test_basic_usage() -> None:
 
 
 def test_reply_to_requests_with_error() -> None:
+    exchange = UnboundThreadExchangeClient()
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=exchange,
         launcher=ThreadLauncher(),
     ) as manager:
-        client_id = manager.exchange.register_client()
-        request = PingRequest(src=client_id, dest=manager.mailbox_id)
-        manager.exchange.send(request.dest, request)
-        mailbox = manager.exchange.get_mailbox(client_id)
-        response = mailbox.recv()
-        assert isinstance(response, PingResponse)
-        assert isinstance(response.exception, TypeError)
-        mailbox.close()
+        with exchange.bind_as_client(start_listener=False) as client:
+            request = PingRequest(
+                src=client.mailbox_id,
+                dest=manager.mailbox_id,
+            )
+            client.send(request.dest, request)
+            response = client.recv()
+            assert isinstance(response, PingResponse)
+            assert isinstance(response.exception, TypeError)
 
 
-def test_wait_bad_identifier(exchange: ThreadExchange) -> None:
+def test_wait_bad_identifier(exchange: UnboundThreadExchangeClient) -> None:
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         agent_id = manager.exchange.register_agent(EmptyBehavior)
@@ -63,10 +65,10 @@ def test_wait_bad_identifier(exchange: ThreadExchange) -> None:
             manager.wait(agent_id)
 
 
-def test_wait_timeout(exchange: ThreadExchange) -> None:
+def test_wait_timeout(exchange: UnboundThreadExchangeClient) -> None:
     behavior = SleepBehavior(TEST_LOOP_SLEEP)
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         handle = manager.launch(behavior)
@@ -75,9 +77,11 @@ def test_wait_timeout(exchange: ThreadExchange) -> None:
             manager.wait(handle.agent_id, timeout=TEST_LOOP_SLEEP)
 
 
-def test_shutdown_bad_identifier(exchange: ThreadExchange) -> None:
+def test_shutdown_bad_identifier(
+    exchange: UnboundThreadExchangeClient,
+) -> None:
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         agent_id = manager.exchange.register_agent(EmptyBehavior)
@@ -86,10 +90,10 @@ def test_shutdown_bad_identifier(exchange: ThreadExchange) -> None:
             manager.shutdown(agent_id)
 
 
-def test_shutdown_nonblocking(exchange: ThreadExchange) -> None:
+def test_shutdown_nonblocking(exchange: UnboundThreadExchangeClient) -> None:
     behavior = SleepBehavior(TEST_LOOP_SLEEP)
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         handle = manager.launch(behavior)
@@ -97,10 +101,10 @@ def test_shutdown_nonblocking(exchange: ThreadExchange) -> None:
         manager.wait(handle.agent_id, timeout=TEST_THREAD_JOIN_TIMEOUT)
 
 
-def test_shutdown_blocking(exchange: ThreadExchange) -> None:
+def test_shutdown_blocking(exchange: UnboundThreadExchangeClient) -> None:
     behavior = SleepBehavior(TEST_LOOP_SLEEP)
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher=ThreadLauncher(),
     ) as manager:
         handle = manager.launch(behavior)
@@ -111,7 +115,7 @@ def test_shutdown_blocking(exchange: ThreadExchange) -> None:
 def test_bad_default_launcher() -> None:
     with pytest.raises(ValueError, match='No launcher named "second"'):
         Manager(
-            exchange=ThreadExchange(),
+            exchange=UnboundThreadExchangeClient(),
             launcher={'first': ThreadLauncher()},
             default_launcher='second',
         )
@@ -120,7 +124,7 @@ def test_bad_default_launcher() -> None:
 def test_add_and_set_launcher_errors() -> None:
     launcher = ThreadLauncher()
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher={'first': launcher},
     ) as manager:
         with pytest.raises(
@@ -137,7 +141,7 @@ def test_add_and_set_launcher_errors() -> None:
 
 def test_multiple_launcher() -> None:
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher={'first': ThreadLauncher()},
     ) as manager:
         manager.launch(EmptyBehavior(), launcher='first')
@@ -150,7 +154,7 @@ def test_multiple_launcher() -> None:
 
 def test_multiple_launcher_no_default() -> None:
     with Manager(
-        exchange=ThreadExchange(),
+        exchange=UnboundThreadExchangeClient(),
         launcher={'first': ThreadLauncher()},
     ) as manager:
         with pytest.raises(ValueError, match='no default is set.'):

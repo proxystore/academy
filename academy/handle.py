@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import abc
 import functools
 import logging
 import sys
-import threading
 import time
 import uuid
 from collections.abc import Iterable
@@ -14,7 +12,6 @@ from concurrent.futures import wait
 from types import TracebackType
 from typing import Any
 from typing import Generic
-from typing import get_args
 from typing import Protocol
 from typing import runtime_checkable
 from typing import TYPE_CHECKING
@@ -34,7 +31,6 @@ from academy.exception import HandleClosedError
 from academy.exception import HandleNotBoundError
 from academy.exception import MailboxClosedError
 from academy.identifier import AgentId
-from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import ActionRequest
 from academy.message import ActionResponse
@@ -47,7 +43,7 @@ from academy.message import ShutdownResponse
 
 if TYPE_CHECKING:
     from academy.behavior import Behavior
-    from academy.exchange import Exchange
+    from academy.exchange import BoundExchangeClient
 else:
     # Behavior is only used in the bounding of the BehaviorT TypeVar.
     Behavior = None
@@ -328,41 +324,99 @@ class ProxyHandle(Generic[BehaviorT]):
         self._agent_closed = True
 
 
-class RemoteHandle(Generic[BehaviorT], abc.ABC):
-    """Handle to a remote agent.
+class UnboundRemoteHandle(Generic[BehaviorT]):
+    """Handle to a remote agent that is unbound.
 
-    This is an abstract base class with three possible concrete types
-    representing the three remote handle states: unbound, client bound, or
-    mailbox bound.
+    Warning:
+        An unbound handle must be bound before use. Otherwise all methods
+        will raise an `HandleNotBoundError` when attempting to send a message
+        to the remote agent.
 
-    An unbound handle does not have a mailbox for itself which means it
-    cannot send messages to the remote agent because the handle does not
-    know the return address to use. Thus, unbound handles need to be bound
-    with `bind_as_client` or `bind_to_mailbox` before they can be used.
+    Args:
+        exchange: Message exchange used for agent communication.
+        agent_id: EntityId of the agent.
+    """
 
-    A client bound handle has a unique handle identifier and mailbox for
-    itself. A mailbox bound handle shares its identifier and mailbox with
-    another entity (e.g., a running agent).
+    def __init__(
+        self,
+        agent_id: AgentId[BehaviorT],
+    ) -> None:
+        self.agent_id = agent_id
+        self.mailbox_id = None
 
-    Note:
-        When an instance is pickled and unpickled, such as when
-        communicated along with an agent dispatched to run in another
-        process, the handle will be unpickled into an `UnboundRemoteHandle`.
-        Thus, the handle will need to be bound before use.
+    def __repr__(self) -> str:
+        name = type(self).__name__
+        return f'{name}(agent_id={self.agent_id!r})'
+
+    def __str__(self) -> str:
+        return f'{type(self).__name__}<agent: {self.agent_id}>'
+
+    def __getattr__(self, name: str) -> Any:
+        """Raises `AttributeError`."""
+        raise AttributeError(self, name=name)
+
+    def bind_to_exchange(
+        self,
+        exchange: BoundExchangeClient,
+    ) -> BoundRemoteHandle[BehaviorT]:
+        """Bind the handle to an existing mailbox.
+
+        Args:
+            exchange: Client exchange to associate with handle
+
+        Returns:
+            Remote handle bound to the identifier.
+        """
+        return exchange.get_handle(self.agent_id)
+
+    def _send_request(self, request: RequestMessage) -> None:
+        raise HandleNotBoundError(self.agent_id)
+
+    def action(
+        self,
+        action: str,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Future[R]:
+        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
+        raise HandleNotBoundError(self.agent_id)
+
+    def close(self) -> None:
+        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
+        raise HandleNotBoundError(self.agent_id)
+
+    def ping(self, *, timeout: float | None = None) -> float:
+        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
+        raise HandleNotBoundError(self.agent_id)
+
+    def shutdown(self) -> None:
+        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
+        raise HandleNotBoundError(self.agent_id)
+
+
+class BoundRemoteHandle(Generic[BehaviorT]):
+    """Handle to a remote agent bound to an existing mailbox.
 
     Args:
         exchange: Message exchange used for agent communication.
         agent_id: EntityId of the target agent of this handle.
         mailbox_id: EntityId of the mailbox this handle receives messages to.
-            If unbound, this is `None`.
     """
 
     def __init__(
         self,
-        exchange: Exchange,
+        exchange: BoundExchangeClient,
         agent_id: AgentId[BehaviorT],
         mailbox_id: EntityId | None = None,
     ) -> None:
+        if agent_id == mailbox_id:
+            raise ValueError(
+                f'Cannot create handle to {agent_id} that is bound to itself. '
+                'Check that the values of `agent_id` and `mailbox_id` '
+                'are different.',
+            )
+
         self.exchange = exchange
         self.agent_id = agent_id
         self.mailbox_id = mailbox_id
@@ -388,9 +442,9 @@ class RemoteHandle(Generic[BehaviorT], abc.ABC):
         self,
     ) -> tuple[
         type[UnboundRemoteHandle[Any]],
-        tuple[Exchange, AgentId[BehaviorT]],
+        tuple[AgentId[BehaviorT]],
     ]:
-        return (UnboundRemoteHandle, (self.exchange, self.agent_id))
+        return (UnboundRemoteHandle, (self.agent_id,))
 
     def __repr__(self) -> str:
         return (
@@ -407,6 +461,10 @@ class RemoteHandle(Generic[BehaviorT], abc.ABC):
             return self.action(name, *args, **kwargs)
 
         return remote_method_call
+
+    def clone(self) -> UnboundRemoteHandle[BehaviorT]:
+        """Create an unbound copy of this handle."""
+        return UnboundRemoteHandle(self.agent_id)
 
     def _process_response(self, response: ResponseMessage) -> None:
         if isinstance(response, (ActionResponse, PingResponse)):
@@ -427,41 +485,6 @@ class RemoteHandle(Generic[BehaviorT], abc.ABC):
 
     def _send_request(self, request: RequestMessage) -> None:
         self.exchange.send(request.dest, request)
-
-    @abc.abstractmethod
-    def bind_as_client(
-        self,
-        client_id: ClientId | None = None,
-    ) -> ClientRemoteHandle[BehaviorT]:
-        """Bind the handle as a unique client in the exchange.
-
-        Note:
-            This is an abstract method. Each remote handle variant implements
-            different semantics.
-
-        Args:
-            client_id: Client identifier to be used by this handle. If `None`,
-                a new identifier will be created using the exchange.
-
-        Returns:
-            Remote handle bound to the client identifier.
-        """
-        ...
-
-    @abc.abstractmethod
-    def bind_to_mailbox(
-        self,
-        mailbox_id: EntityId,
-    ) -> BoundRemoteHandle[BehaviorT]:
-        """Bind the handle to an existing mailbox.
-
-        Args:
-            mailbox_id: EntityId of the mailbox to bind to.
-
-        Returns:
-            Remote handle bound to the identifier.
-        """
-        ...
 
     def close(
         self,
@@ -620,278 +643,16 @@ class RemoteHandle(Generic[BehaviorT], abc.ABC):
             self.agent_id,
         )
 
-
-class UnboundRemoteHandle(RemoteHandle[BehaviorT]):
-    """Handle to a remote agent that is unbound.
-
-    Warning:
-        An unbound handle must be bound before use. Otherwise all methods
-        will raise an `HandleNotBoundError` when attempting to send a message
-        to the remote agent.
-
-    Args:
-        exchange: Message exchange used for agent communication.
-        agent_id: EntityId of the agent.
-    """
-
-    def __init__(
+    def bind_to_exchange(
         self,
-        exchange: Exchange,
-        agent_id: AgentId[BehaviorT],
-    ) -> None:
-        super().__init__(exchange, agent_id=agent_id)
-
-    def __repr__(self) -> str:
-        name = type(self).__name__
-        return (
-            f'{name}(agent_id={self.agent_id!r}, exchange={self.exchange!r})'
-        )
-
-    def __str__(self) -> str:
-        return f'{type(self).__name__}<agent: {self.agent_id}>'
-
-    def _send_request(self, request: RequestMessage) -> None:
-        raise HandleNotBoundError(self.agent_id)
-
-    def bind_as_client(
-        self,
-        client_id: ClientId | None = None,
-    ) -> ClientRemoteHandle[BehaviorT]:
-        """Bind the handle as a unique client in the exchange.
-
-        Args:
-            client_id: Client identifier to be used by this handle. If `None`,
-                a new identifier will be created using the exchange.
-
-        Returns:
-            Remote handle bound to the client identifier.
-        """
-        return ClientRemoteHandle(self.exchange, self.agent_id, client_id)
-
-    def bind_to_mailbox(
-        self,
-        mailbox_id: EntityId,
+        exchange: BoundExchangeClient,
     ) -> BoundRemoteHandle[BehaviorT]:
         """Bind the handle to an existing mailbox.
 
         Args:
-            mailbox_id: EntityId of the mailbox to bind to.
+            exchange: Client exchange to associate with handle
 
         Returns:
             Remote handle bound to the identifier.
         """
-        return BoundRemoteHandle(self.exchange, self.agent_id, mailbox_id)
-
-    def action(
-        self,
-        action: str,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Future[R]:
-        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
-        raise HandleNotBoundError(self.agent_id)
-
-    def ping(self, *, timeout: float | None = None) -> float:
-        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
-        raise HandleNotBoundError(self.agent_id)
-
-    def shutdown(self) -> None:
-        """Raises [`HandleNotBoundError`][academy.exception.HandleNotBoundError]."""  # noqa: E501
-        raise HandleNotBoundError(self.agent_id)
-
-
-class BoundRemoteHandle(RemoteHandle[BehaviorT]):
-    """Handle to a remote agent bound to an existing mailbox.
-
-    Args:
-        exchange: Message exchange used for agent communication.
-        agent_id: EntityId of the target agent of this handle.
-        mailbox_id: EntityId of the mailbox this handle receives messages to.
-    """
-
-    def __init__(
-        self,
-        exchange: Exchange,
-        agent_id: AgentId[BehaviorT],
-        mailbox_id: EntityId,
-    ) -> None:
-        if agent_id == mailbox_id:
-            raise ValueError(
-                f'Cannot create handle to {agent_id} that is bound to itself. '
-                'Check that the values of `agent_id` and `mailbox_id` '
-                'are different.',
-            )
-        super().__init__(exchange, agent_id, mailbox_id)
-
-    def bind_as_client(
-        self,
-        client_id: ClientId | None = None,
-    ) -> ClientRemoteHandle[BehaviorT]:
-        """Bind the handle as a unique client in the exchange.
-
-        Args:
-            client_id: Client identifier to be used by this handle. If `None`,
-                a new identifier will be created using the exchange.
-
-        Returns:
-            Remote handle bound to the client identifier.
-        """
-        return ClientRemoteHandle(self.exchange, self.agent_id, client_id)
-
-    def bind_to_mailbox(
-        self,
-        mailbox_id: EntityId,
-    ) -> BoundRemoteHandle[BehaviorT]:
-        """Bind the handle to an existing mailbox.
-
-        Args:
-            mailbox_id: EntityId of the mailbox to bind to.
-
-        Returns:
-            Remote handle bound to the identifier.
-        """
-        if mailbox_id == self.mailbox_id:
-            return self
-        else:
-            return BoundRemoteHandle(self.exchange, self.agent_id, mailbox_id)
-
-    def close(
-        self,
-        wait_futures: bool = True,
-        *,
-        timeout: float | None = None,
-    ) -> None:
-        """Close this handle.
-
-        Args:
-            wait_futures: Wait to return until all pending futures are done
-                executing. If `False`, pending futures are cancelled.
-            timeout: Optional timeout used when `wait=True`.
-        """
-        super().close(wait_futures, timeout=timeout)
-        logger.debug('Closed handle (%s)', self)
-
-
-class ClientRemoteHandle(RemoteHandle[BehaviorT]):
-    """Handle to a remote agent bound as a unique client.
-
-    Args:
-        exchange: Message exchange used for agent communication.
-        agent_id: EntityId of the target agent of this handle.
-        client_id: Client identifier of this handle. If `None`, a new
-            identifier will be created using the exchange. Note this will
-            become the `mailbox_id` attribute of the handle.
-    """
-
-    def __init__(
-        self,
-        exchange: Exchange,
-        agent_id: AgentId[BehaviorT],
-        client_id: ClientId | None = None,
-    ) -> None:
-        if client_id is None:
-            client_id = exchange.register_client()
-        super().__init__(exchange, agent_id, client_id)
-        assert self.mailbox_id is not None
-        self._mailbox = self.exchange.get_mailbox(self.mailbox_id)
-        self._recv_thread = threading.Thread(
-            target=self._recv_responses,
-            name=f'{self}-message-handler',
-        )
-        self._recv_thread.start()
-
-    def _recv_responses(self) -> None:
-        logger.debug('Started result listener thread for %s', self)
-
-        try:
-            while True:
-                try:
-                    message = self._mailbox.recv()
-                except MailboxClosedError:
-                    break
-
-                if isinstance(message, get_args(ResponseMessage)):
-                    self._process_response(message)
-                else:
-                    logger.error(
-                        'Received invalid message response type %s from %s',
-                        type(message).__name__,
-                        self.agent_id,
-                    )
-        except Exception:  # pragma: no cover
-            logger.exception('Error in result listener thread for %s', self)
-
-        logger.debug('Exiting result listener thread for %s', self)
-
-    def bind_as_client(
-        self,
-        client_id: ClientId | None = None,
-    ) -> ClientRemoteHandle[BehaviorT]:
-        """Bind the handle as a unique client in the exchange.
-
-        Args:
-            client_id: Client identifier to be used by this handle. If `None`
-                or equal to this handle's ID, self will be returned. Otherwise,
-                a new identifier will be created using the exchange.
-
-        Returns:
-            Remote handle bound to the client identifier.
-        """
-        if client_id is None or client_id == self.mailbox_id:
-            return self
-        else:
-            return ClientRemoteHandle(self.exchange, self.agent_id, client_id)
-
-    def bind_to_mailbox(
-        self,
-        mailbox_id: EntityId,
-    ) -> BoundRemoteHandle[BehaviorT]:
-        """Bind the handle to an existing mailbox.
-
-        Args:
-            mailbox_id: EntityId of the mailbox to bind to.
-
-        Returns:
-            Remote handle bound to the identifier.
-        """
-        return BoundRemoteHandle(self.exchange, self.agent_id, mailbox_id)
-
-    def close(
-        self,
-        wait_futures: bool = True,
-        *,
-        timeout: float | None = None,
-    ) -> None:
-        """Close this handle.
-
-        Args:
-            wait_futures: Wait to return until all pending futures are done
-                executing. If `False`, pending futures are cancelled.
-            timeout: Optional timeout used when `wait=True`.
-
-        Raises:
-            RuntimeError: if the response message listener thread is not alive
-                when `close()` is called indicating the listener thread likely
-                crashed.
-        """
-        super().close(wait_futures, timeout=timeout)
-
-        assert isinstance(self.mailbox_id, ClientId)
-        if not self._recv_thread.is_alive():
-            raise RuntimeError(
-                f'Result message listener for {self.mailbox_id} is not alive. '
-                'This likely means the listener thread crashed.',
-            )
-
-        self.exchange.terminate(self.mailbox_id)
-        timeout = 5
-        self._recv_thread.join(timeout=timeout)
-        if self._recv_thread.is_alive():  # pragma: no cover
-            raise TimeoutError(
-                f'Result message listener for {self.mailbox_id} did '
-                f'not exit within {timeout} seconds.',
-            )
-        self._mailbox.close()
-
-        logger.debug('Closed handle (%s)', self)
+        return self.clone().bind_to_exchange(exchange)

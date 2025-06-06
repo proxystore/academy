@@ -40,7 +40,7 @@ class HandleNotBoundError(Exception):
     A handle must be bound to be used, either as a unique client with its own
     mailbox or as bound to a running agent where it shares a mailbox with that
     running agent. To create a client bound handle, use
-    `handle.bind_as_client()`.
+    `handle.bind_to_exchange()`.
 
     Any agent behavior that has a handle to another agent as an instance
     attribute will be automatically bound to the agent when the agent begins
@@ -49,8 +49,8 @@ class HandleNotBoundError(Exception):
 
     def __init__(self, aid: AgentId[Any]) -> None:
         super().__init__(
-            f'Handle to {aid} is not bound as a client nor to a running '
-            'agent. See the exception docstring for troubleshooting.',
+            f'Handle to {aid} to an exchange. See the exception docstring '
+            'for troubleshooting.',
         )
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
-import threading
 from collections.abc import MutableMapping
 from types import TracebackType
 from typing import Any
@@ -17,14 +16,12 @@ else:  # pragma: <3.11 cover
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import Exchange
+from academy.exchange import BoundExchangeClient
+from academy.exchange import UnboundExchangeClient
 from academy.handle import BoundRemoteHandle
-from academy.handle import RemoteHandle
 from academy.identifier import AgentId
-from academy.identifier import ClientId
+from academy.identifier import EntityId
 from academy.launcher import Launcher
-from academy.message import RequestMessage
-from academy.multiplex import MailboxMultiplexer
 from academy.serialize import NoPickleMixin
 
 logger = logging.getLogger(__name__)
@@ -66,7 +63,7 @@ class Manager(NoPickleMixin):
 
     def __init__(
         self,
-        exchange: Exchange,
+        exchange: UnboundExchangeClient,
         launcher: Launcher | MutableMapping[str, Launcher],
         *,
         default_launcher: str | None = None,
@@ -81,23 +78,14 @@ class Manager(NoPickleMixin):
                 'use as the default.',
             )
 
-        self._exchange = exchange
+        self._exchange = exchange.bind_as_client()
+        self._mailbox_id = self._exchange.mailbox_id
         self._launchers = launcher
         self._default_launcher = default_launcher
 
-        self._mailbox_id = exchange.register_client()
-        self._multiplexer = MailboxMultiplexer(
-            self.mailbox_id,
-            self._exchange,
-            self._handle_request,
-        )
         self._handles: dict[AgentId[Any], BoundRemoteHandle[Any]] = {}
         self._aid_to_launcher: dict[AgentId[Any], str] = {}
-        self._listener_thread = threading.Thread(
-            target=self._multiplexer.listen,
-            name=f'multiplexer-{self.mailbox_id.uid}-listener',
-        )
-        self._listener_thread.start()
+
         logger.info(
             'Initialized manager (%s; %s)',
             self._mailbox_id,
@@ -128,22 +116,14 @@ class Manager(NoPickleMixin):
         return f'{type(self).__name__}<{self.mailbox_id}, {self._exchange}>'
 
     @property
-    def exchange(self) -> Exchange:
+    def exchange(self) -> BoundExchangeClient:
         """Exchange interface."""
         return self._exchange
 
     @property
-    def mailbox_id(self) -> ClientId:
+    def mailbox_id(self) -> EntityId:
         """EntityId of the mailbox used by this manager."""
         return self._mailbox_id
-
-    def _handle_request(self, request: RequestMessage) -> None:
-        response = request.error(
-            TypeError(
-                f'Client with {self.mailbox_id} cannot fulfill requests.',
-            ),
-        )
-        self.exchange.send(response.dest, response)
 
     def close(self) -> None:
         """Close the manager and cleanup resources.
@@ -160,9 +140,8 @@ class Manager(NoPickleMixin):
                 with contextlib.suppress(MailboxClosedError):
                     handle.shutdown()
         logger.debug('Instructed managed agents to shutdown')
-        self._multiplexer.close_bound_handles()
-        self._multiplexer.terminate()
-        self._listener_thread.join()
+        self.exchange.close_bound_handles()
+        self.exchange.terminate(self.mailbox_id)
         self.exchange.close()
         for launcher in self._launchers.values():
             launcher.close()
@@ -247,15 +226,14 @@ class Manager(NoPickleMixin):
         launcher = launcher if launcher is not None else self._default_launcher
         assert launcher is not None
         launcher_instance = self._launchers[launcher]
-        unbound = launcher_instance.launch(
+        bound = launcher_instance.launch(
             behavior,
             exchange=self.exchange,
             agent_id=agent_id,
             name=name,
         )
-        self._aid_to_launcher[unbound.agent_id] = launcher
-        logger.info('Launched agent (%s; %s)', unbound.agent_id, behavior)
-        bound = self._multiplexer.bind(unbound)
+        self._aid_to_launcher[bound.agent_id] = launcher
+        logger.info('Launched agent (%s; %s)', bound.agent_id, behavior)
         self._handles[bound.agent_id] = bound
         logger.debug('Bound agent handle to manager (%s)', bound)
         return bound
@@ -292,7 +270,7 @@ class Manager(NoPickleMixin):
 
     def wait(
         self,
-        agent: AgentId[Any] | RemoteHandle[Any],
+        agent: AgentId[Any] | BoundRemoteHandle[Any],
         *,
         timeout: float | None = None,
     ) -> None:
@@ -307,7 +285,9 @@ class Manager(NoPickleMixin):
                 the agent was not launched by this launcher.
             TimeoutError: If `timeout` was exceeded while waiting for agent.
         """
-        agent_id = agent.agent_id if isinstance(agent, RemoteHandle) else agent
+        agent_id = (
+            agent.agent_id if isinstance(agent, BoundRemoteHandle) else agent
+        )
         if agent_id not in self._aid_to_launcher:
             raise BadEntityIdError(agent_id)
         launcher_name = self._aid_to_launcher[agent_id]

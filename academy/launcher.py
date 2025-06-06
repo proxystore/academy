@@ -22,8 +22,9 @@ from academy.agent import Agent
 from academy.agent import AgentRunConfig
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
-from academy.exchange import Exchange
-from academy.handle import RemoteHandle
+from academy.exchange import BoundExchangeClient
+from academy.exchange import UnboundExchangeClient
+from academy.handle import BoundRemoteHandle
 from academy.identifier import AgentId
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class _ACB(Generic[BehaviorT]):
     # Agent Control Block
     agent_id: AgentId[BehaviorT]
     behavior: BehaviorT
-    exchange: Exchange
+    exchange: UnboundExchangeClient
     done: threading.Event
     future: Future[None] | None = None
     launch_count: int = 0
@@ -138,7 +139,6 @@ class Launcher:
             agent_id=acb.agent_id,
             exchange=acb.exchange,
             config=AgentRunConfig(
-                close_exchange_on_exit=self._close_exchange,
                 terminate_on_error=acb.launch_count + 1 >= self._max_restarts,
             ),
         )
@@ -167,11 +167,11 @@ class Launcher:
     def launch(
         self,
         behavior: BehaviorT,
-        exchange: Exchange,
+        exchange: BoundExchangeClient,
         *,
         agent_id: AgentId[BehaviorT] | None = None,
         name: str | None = None,
-    ) -> RemoteHandle[BehaviorT]:
+    ) -> BoundRemoteHandle[BehaviorT]:
         """Launch a new agent with a specified behavior.
 
         Args:
@@ -191,7 +191,12 @@ class Launcher:
             else agent_id
         )
 
-        acb = _ACB(agent_id, behavior, exchange, done=threading.Event())
+        acb = _ACB(
+            agent_id,
+            behavior,
+            exchange.clone(),
+            done=threading.Event(),
+        )
         self._acbs[agent_id] = acb
         self._launch(agent_id)
 

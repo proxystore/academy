@@ -12,9 +12,11 @@ from proxystore.store import Store
 from proxystore.store.executor import ProxyAlways
 from proxystore.store.executor import ProxyNever
 
-from academy.exchange.cloud.client import HttpExchange
-from academy.exchange.proxystore import ProxyStoreExchange
-from academy.exchange.thread import ThreadExchange
+from academy.exchange import MailboxStatus
+from academy.exchange import UnboundExchangeClient
+from academy.exchange.cloud.client import UnboundHttpExchangeClient
+from academy.exchange.proxystore import UnboundProxyStoreExchange
+from academy.exchange.thread import BoundThreadExchangeClient
 from academy.message import ActionRequest
 from academy.message import ActionResponse
 from academy.message import PingRequest
@@ -44,23 +46,27 @@ def store() -> Generator[Store[LocalConnector], None, None]:
 def test_basic_usage(
     should_proxy: Callable[[Any], bool],
     resolve_async: bool,
-    exchange: ThreadExchange,
+    exchange: BoundThreadExchangeClient,
     store: Store[LocalConnector],
 ) -> None:
-    with ProxyStoreExchange(
-        exchange,
+    wrapped_exchange_unbound = UnboundProxyStoreExchange(
+        exchange.clone(),  # Fixture is already bound, so need to clone
         store,
         should_proxy,
         resolve_async=resolve_async,
-    ) as wrapped_exchange:
-        src = wrapped_exchange.register_client()
+    )
+
+    with wrapped_exchange_unbound.bind_as_client() as wrapped_exchange:
+        src = wrapped_exchange.mailbox_id
         dest = wrapped_exchange.register_agent(EmptyBehavior)
-        mailbox = wrapped_exchange.get_mailbox(dest)
-        assert mailbox.exchange is wrapped_exchange
+        status = wrapped_exchange.status(dest)
+        assert status == MailboxStatus.ACTIVE
+
+        mailbox = wrapped_exchange_unbound.bind_as_agent(agent_id=dest)
         assert mailbox.mailbox_id == dest
 
         ping = PingRequest(src=src, dest=dest)
-        exchange.send(dest, ping)
+        wrapped_exchange.send(dest, ping)
         assert mailbox.recv() == ping
 
         request = ActionRequest(
@@ -109,12 +115,36 @@ def test_serialize(
     store: Store[LocalConnector],
 ) -> None:
     host, port = http_exchange_server
-    with HttpExchange(host, port) as base_exchange:
-        with ProxyStoreExchange(
-            base_exchange,
-            store,
-            should_proxy=ProxyAlways(),
-        ) as exchange:
-            dumped = pickle.dumps(exchange)
-            reconstructed = pickle.loads(dumped)
-            reconstructed.close()
+
+    unbound_base_exchange = UnboundHttpExchangeClient(host, port)
+    unbound_proxystore_exchange = UnboundProxyStoreExchange(
+        unbound_base_exchange,
+        store,
+        should_proxy=ProxyAlways(),
+    )
+    dumped = pickle.dumps(unbound_proxystore_exchange)
+    reconstructed = pickle.loads(dumped)
+    assert isinstance(reconstructed, UnboundProxyStoreExchange)
+
+    with unbound_proxystore_exchange.bind_as_client() as exchange:
+        dumped = pickle.dumps(exchange)
+        reconstructed = pickle.loads(dumped)
+        assert isinstance(reconstructed, UnboundProxyStoreExchange)
+        assert isinstance(reconstructed.exchange, UnboundHttpExchangeClient)
+
+
+def test_clone(
+    exchange: BoundThreadExchangeClient,
+    store: Store[LocalConnector],
+) -> None:
+    wrapped_exchange_unbound = UnboundProxyStoreExchange(
+        exchange.clone(),  # Fixture is already bound, so need to clone
+        store,
+        ProxyAlways(),
+    )
+
+    with wrapped_exchange_unbound.bind_as_client() as wrapped:
+        cloned = wrapped.clone()
+
+        assert isinstance(cloned, UnboundProxyStoreExchange)
+        assert isinstance(cloned.exchange, UnboundExchangeClient)

@@ -3,6 +3,9 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Generator
 from typing import Any
+from unittest import mock
+
+import pytest
 
 
 class MockRedis:
@@ -56,3 +59,10 @@ class MockRedis:
 
     def set(self, key: str, value: str) -> None:
         self.values[key] = value
+
+
+@pytest.fixture
+def mock_redis() -> Generator[None]:
+    redis = MockRedis()
+    with mock.patch('redis.Redis', return_value=redis):
+        yield

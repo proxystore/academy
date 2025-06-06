@@ -15,19 +15,17 @@ from typing import TypeVar
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import Exchange
+from academy.exchange import UnboundExchangeClient
 from academy.handle import BoundRemoteHandle
-from academy.handle import ClientRemoteHandle
 from academy.handle import Handle
 from academy.handle import ProxyHandle
-from academy.handle import RemoteHandle
+from academy.handle import UnboundRemoteHandle
 from academy.identifier import AgentId
 from academy.message import ActionRequest
 from academy.message import PingRequest
 from academy.message import RequestMessage
 from academy.message import ResponseMessage
 from academy.message import ShutdownRequest
-from academy.multiplex import MailboxMultiplexer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +69,7 @@ class AgentRunConfig:
 def _agent_trampoline(
     behavior: BehaviorT,
     agent_id: AgentId[BehaviorT],
-    exchange: Exchange,
+    exchange: UnboundExchangeClient,
     config: AgentRunConfig,
 ) -> Agent[BehaviorT]:
     return Agent(
@@ -110,19 +108,22 @@ class Agent(Generic[BehaviorT]):
         behavior: BehaviorT,
         *,
         agent_id: AgentId[BehaviorT],
-        exchange: Exchange,
+        exchange: UnboundExchangeClient,
         config: AgentRunConfig | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.behavior = behavior
-        self.exchange = exchange
+        self.exchange = exchange.bind_as_agent(
+            agent_id,
+            handler=self._request_handler,
+        )
         self.config = config if config is not None else AgentRunConfig()
 
         self._actions = behavior.behavior_actions()
         self._loops = behavior.behavior_loops()
 
         self._shutdown = threading.Event()
-        self._expected_shutdown = True
+        self._expected_shutdown = False
         self._state_lock = threading.Lock()
         self._state = _AgentState.INITIALIZED
 
@@ -130,12 +131,6 @@ class Agent(Generic[BehaviorT]):
         self._action_futures: dict[ActionRequest, Future[None]] = {}
         self._loop_pool: ThreadPoolExecutor | None = None
         self._loop_futures: dict[Future[None], str] = {}
-
-        self._multiplexer = MailboxMultiplexer(
-            self.agent_id,
-            self.exchange,
-            request_handler=self._request_handler,
-        )
 
     def __call__(self) -> None:
         """Alias for [run()][academy.agent.Agent.run]."""
@@ -162,7 +157,7 @@ class Agent(Generic[BehaviorT]):
     def _bind_handle(self, handle: Handle[BehaviorT]) -> Handle[BehaviorT]:
         if isinstance(
             handle,
-            (ClientRemoteHandle, ProxyHandle),
+            (ProxyHandle),
         ):  # pragma: no cover
             # Ignore proxy handles and already bound client handles.
             return handle
@@ -172,8 +167,8 @@ class Agent(Generic[BehaviorT]):
         ):
             return handle
 
-        assert isinstance(handle, RemoteHandle)
-        bound = self._multiplexer.bind(handle)
+        assert isinstance(handle, UnboundRemoteHandle | BoundRemoteHandle)
+        bound = handle.bind_to_exchange(self.exchange)
         logger.debug(
             'Bound handle to %s to running agent with %s',
             handle.agent_id,
@@ -316,8 +311,8 @@ class Agent(Generic[BehaviorT]):
                 self._loop_futures[loop_future] = name
                 loop_future.add_done_callback(self._loop_callback)
 
-            listener_future = self._loop_pool.submit(self._multiplexer.listen)
-            self._loop_futures[listener_future] = '_multiplexer.listen'
+            listener_future = self._loop_pool.submit(self.exchange.listen)
+            self._loop_futures[listener_future] = '_exchange.listen'
 
             self._state = _AgentState.RUNNING
 
@@ -355,16 +350,16 @@ class Agent(Generic[BehaviorT]):
             self._state = _AgentState.TERMINTATING
             self._shutdown.set()
 
-            # Cause the multiplexer message listener thread to exit by closing
-            # the mailbox the multiplexer is listening to. This is done
+            # Cause the exchange message listener thread to exit by closing
+            # the mailbox the exchange is listening to. This is done
             # first so we stop receiving new requests.
-            self._multiplexer.terminate()
+            self.exchange.terminate(self.agent_id)
             for future, name in self._loop_futures.items():
-                if name == '_multiplexer.listen':
+                if name == '_exchange.listen':
                     future.result()
 
             # Wait for currently running actions to complete. No more
-            # should come in now that multiplexer's listener thread is done.
+            # should come in now that exchange's listener thread is done.
             if self._action_pool is not None:
                 self._action_pool.shutdown(wait=True, cancel_futures=True)
 
@@ -379,7 +374,7 @@ class Agent(Generic[BehaviorT]):
                 and not self.config.terminate_on_error
             ):
                 # TODO: This is a hack because we need to close the mailbox
-                # for the multiplexer listener thread to exit, but in some
+                # for the exchange listener thread to exit, but in some
                 # cases we don't actually want to close it permanently. This
                 # means there is a race where the mailbox is temporarily
                 # closed.

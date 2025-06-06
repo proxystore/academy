@@ -4,6 +4,7 @@ import enum
 import logging
 import uuid
 from typing import Any
+from typing import Callable
 from typing import get_args
 from typing import TypeVar
 
@@ -12,13 +13,15 @@ import redis
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeMixin
+from academy.exchange import BoundExchangeClient
+from academy.exchange import MailboxStatus
+from academy.exchange import UnboundExchangeClient
 from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import BaseMessage
 from academy.message import Message
-from academy.serialize import NoPickleMixin
+from academy.message import RequestMessage
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ class _MailboxState(enum.Enum):
     INACTIVE = 'INACTIVE'
 
 
-class RedisExchange(ExchangeMixin):
+class UnboundRedisExchangeClient(UnboundExchangeClient):
     """Redis-hosted message exchange interface.
 
     Args:
@@ -59,29 +62,77 @@ class RedisExchange(ExchangeMixin):
         self.port = port
         self.timeout = timeout
         self._kwargs = kwargs
-        self._client = redis.Redis(
-            host=hostname,
-            port=port,
-            decode_responses=False,
-            **kwargs,
+
+    def _bind(
+        self,
+        mailbox_id: EntityId | None = None,
+        name: str | None = None,
+        handler: Callable[[RequestMessage], None] | None = None,
+        *,
+        start_listener: bool,
+    ) -> BoundRedisExchangeClient:
+        """Bind exchange to client or agent.
+
+        If no agent is provided, exchange should create a new mailbox without
+        an associated behavior and bind to that. Otherwise, the exchange will
+        bind to the mailbox associated with the provided agent.
+
+        Note:
+            This is intentionally restrictive. Each user or agent should only
+            bind to the exchange with a single address. This forces
+            multiplexing of handles to other agents and requests to this
+            agents.
+        """
+        return BoundRedisExchangeClient(
+            self,
+            mailbox_id=mailbox_id,
+            name=name,
+            handler=handler,
+            start_listener=start_listener,
         )
-        self._client.ping()
 
-    def __getstate__(self) -> dict[str, Any]:
-        return {
-            'hostname': self.hostname,
-            'port': self.port,
-            'timeout': self.timeout,
-            '_kwargs': self._kwargs,
-        }
 
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        self.__dict__.update(state)
+class BoundRedisExchangeClient(BoundExchangeClient):
+    """Redis-hosted message exchange interface.
+
+    Args:
+        unbound: The unbound exchange to use to create this client
+        mailbox_id: Identifier of the mailbox on the exchange. If there is
+            not an id provided, the exchange will create a new client mail-
+            box.
+        name: Display name of mailbox on exchange.
+        handler:  Callback to handler requests to this exchange.
+
+    Raises:
+        redis.exceptions.ConnectionError: If the Redis server is not reachable.
+    """
+
+    def __init__(
+        self,
+        unbound: UnboundRedisExchangeClient,
+        mailbox_id: EntityId | None = None,
+        name: str | None = None,
+        handler: Callable[[RequestMessage], None] | None = None,
+        *,
+        start_listener: bool,
+    ) -> None:
+        self.hostname = unbound.hostname
+        self.port = unbound.port
+        self.timeout = unbound.timeout
+        self._kwargs = unbound._kwargs
         self._client = redis.Redis(
             host=self.hostname,
             port=self.port,
             decode_responses=False,
             **self._kwargs,
+        )
+        self._client.ping()
+
+        super().__init__(
+            mailbox_id,
+            name,
+            handler,
+            start_listener=start_listener,
         )
 
     def __repr__(self) -> str:
@@ -92,6 +143,22 @@ class RedisExchange(ExchangeMixin):
 
     def __str__(self) -> str:
         return f'{type(self).__name__}<{self.hostname}:{self.port}>'
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        type[UnboundRedisExchangeClient],
+        tuple[str, int],
+        dict[str, Any],
+    ]:
+        return (
+            UnboundRedisExchangeClient,
+            (self.hostname, self.port),
+            {
+                'timeout': self.timeout,
+                '_kwargs': self._kwargs,
+            },
+        )
 
     def _active_key(self, uid: EntityId) -> str:
         return f'active:{uid.uid}'
@@ -104,8 +171,20 @@ class RedisExchange(ExchangeMixin):
 
     def close(self) -> None:
         """Close the exchange interface."""
+        super().close()
+
         self._client.close()
         logger.debug('Closed exchange (%s)', self)
+
+    def status(self, mailbox_id: EntityId) -> MailboxStatus:
+        """Check status of mailbox on exchange."""
+        status = self._client.get(self._active_key(mailbox_id))
+        if status is None:
+            return MailboxStatus.MISSING
+        elif status == _MailboxState.INACTIVE.value:
+            return MailboxStatus.TERMINATED
+        else:
+            return MailboxStatus.ACTIVE
 
     def register_agent(
         self,
@@ -135,7 +214,7 @@ class RedisExchange(ExchangeMixin):
         logger.debug('Registered %s in %s', aid, self)
         return aid
 
-    def register_client(
+    def _register_client(
         self,
         *,
         name: str | None = None,
@@ -205,20 +284,6 @@ class RedisExchange(ExchangeMixin):
                 active.append(aid)
         return tuple(active)
 
-    def get_mailbox(self, uid: EntityId) -> RedisMailbox:
-        """Get a client to a specific mailbox.
-
-        Args:
-            uid: EntityId of the mailbox.
-
-        Returns:
-            Mailbox client.
-
-        Raises:
-            BadEntityIdError: if a mailbox for `uid` does not exist.
-        """
-        return RedisMailbox(uid, self)
-
     def send(self, uid: EntityId, message: Message) -> None:
         """Send a message to a mailbox.
 
@@ -239,46 +304,6 @@ class RedisExchange(ExchangeMixin):
             self._client.rpush(self._queue_key(uid), message.model_serialize())
             logger.debug('Sent %s to %s', type(message).__name__, uid)
 
-
-class RedisMailbox(NoPickleMixin):
-    """Client protocol that listens to incoming messages to a mailbox.
-
-    Args:
-        uid: EntityId of the mailbox.
-        exchange: Exchange client.
-
-    Raises:
-        BadEntityIdError: if a mailbox with `uid` does not exist.
-    """
-
-    def __init__(self, uid: EntityId, exchange: RedisExchange) -> None:
-        self._uid = uid
-        self._exchange = exchange
-
-        status = self.exchange._client.get(self.exchange._active_key(uid))
-        if status is None:
-            raise BadEntityIdError(uid)
-
-    @property
-    def exchange(self) -> RedisExchange:
-        """Exchange client."""
-        return self._exchange
-
-    @property
-    def mailbox_id(self) -> EntityId:
-        """Mailbox address/identifier."""
-        return self._uid
-
-    def close(self) -> None:
-        """Close this mailbox client.
-
-        Warning:
-            This does not close the mailbox in the exchange. I.e., the exchange
-            will still accept new messages to this mailbox, but this client
-            will no longer be listening for them.
-        """
-        pass
-
     def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
 
@@ -297,8 +322,8 @@ class RedisMailbox(NoPickleMixin):
         """
         _timeout = int(timeout) if timeout is not None else 1
         while True:
-            status = self.exchange._client.get(
-                self.exchange._active_key(self.mailbox_id),
+            status = self._client.get(
+                self._active_key(self.mailbox_id),
             )
             if status is None:
                 raise AssertionError(
@@ -309,8 +334,8 @@ class RedisMailbox(NoPickleMixin):
             elif status == _MailboxState.INACTIVE.value:
                 raise MailboxClosedError(self.mailbox_id)
 
-            raw = self.exchange._client.blpop(
-                [self.exchange._queue_key(self.mailbox_id)],
+            raw = self._client.blpop(
+                [self._queue_key(self.mailbox_id)],
                 timeout=_timeout,
             )
             if raw is None and timeout is not None:
@@ -334,3 +359,12 @@ class RedisMailbox(NoPickleMixin):
                 self.mailbox_id,
             )
             return message
+
+    def clone(self) -> UnboundRedisExchangeClient:
+        """Shallow copy exchange to new, unbound version."""
+        return UnboundRedisExchangeClient(
+            self.hostname,
+            self.port,
+            timeout=self.timeout,
+            **self._kwargs,
+        )
