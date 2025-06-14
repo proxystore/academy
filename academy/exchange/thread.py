@@ -101,15 +101,15 @@ class ThreadExchangeClient(ExchangeClient):
             start_listener=start_listener,
         )
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the exchange.
 
         This will leave the queues in the state open.
         """
-        super().close()
+        await super().close()
         logger.debug('Closed exchange (%s)', self)
 
-    def status(self, mailbox_id: EntityId) -> MailboxStatus:
+    async def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of mailbox on exchange."""
         if mailbox_id not in self._state.queues:
             return MailboxStatus.MISSING
@@ -117,7 +117,7 @@ class ThreadExchangeClient(ExchangeClient):
             return MailboxStatus.TERMINATED
         return MailboxStatus.ACTIVE
 
-    def register_agent(
+    async def register_agent(
         self,
         behavior: type[BehaviorT],
         *,
@@ -143,7 +143,7 @@ class ThreadExchangeClient(ExchangeClient):
             logger.debug('Registered %s in %s', aid, self)
         return aid
 
-    def _register_client(
+    async def _register_client(
         self,
         name: str | None = None,
     ) -> ClientId:
@@ -160,7 +160,7 @@ class ThreadExchangeClient(ExchangeClient):
         logger.debug('Registered %s in %s', cid, self)
         return cid
 
-    def terminate(self, uid: EntityId) -> None:
+    async def terminate(self, uid: EntityId) -> None:
         """Close the mailbox for an entity from the exchange.
 
         Note:
@@ -176,7 +176,7 @@ class ThreadExchangeClient(ExchangeClient):
                 self._state.behaviors.pop(uid, None)
             logger.debug('Closed mailbox for %s (%s)', uid, self)
 
-    def discover(
+    async def discover(
         self,
         behavior: type[Behavior],
         *,
@@ -203,7 +203,7 @@ class ThreadExchangeClient(ExchangeClient):
         )
         return alive
 
-    def send(self, uid: EntityId, message: Message) -> None:
+    async def send(self, uid: EntityId, message: Message) -> None:
         """Send a message to a mailbox.
 
         Args:
@@ -223,7 +223,7 @@ class ThreadExchangeClient(ExchangeClient):
         except QueueClosedError as e:
             raise MailboxClosedError(uid) from e
 
-    def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
 
         This blocks until the next message is received or the mailbox
@@ -239,7 +239,8 @@ class ThreadExchangeClient(ExchangeClient):
             TimeoutError: if a `timeout` was specified and exceeded.
         """
         try:
-            message = self._state.queues[self.mailbox_id].get(timeout=timeout)
+            queue = self._state.queues[self.mailbox_id]
+            message = queue.get(timeout=timeout)
             logger.debug(
                 'Received %s to %s',
                 type(message).__name__,

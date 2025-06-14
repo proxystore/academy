@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import abc
 import enum
 import logging
 import sys
-import threading
 import uuid
 from types import TracebackType
 from typing import Any
@@ -97,8 +97,8 @@ class ExchangeFactory(abc.ABC):
 
         Args:
             name: Display name of the client on the exchange.
-            start_listener: Start a thread to receive messages and multiplex
-                to handles.
+            start_listener: Start a listener task that receives and processes
+                messages for handles.
         """
         return self._bind(
             mailbox_id=None,
@@ -112,7 +112,7 @@ class ExchangeFactory(abc.ABC):
         agent_id: AgentId[Any],
         *,
         name: str | None = None,
-        handler: Callable[[RequestMessage], None] | None = None,
+        handler: Callable[[RequestMessage], Coroutine[None]] | None = None,
     ) -> ExchangeClient:
         """Bind exchange to an agent mailbox.
 
@@ -155,7 +155,9 @@ class ExchangeClient(abc.ABC):
         mailbox_id: Identifier of the mailbox on the exchange. If there is
             not an id provided, the exchange will create a new client mailbox.
         name: Display name of mailbox on exchange.
-        handler:  Callback to handler requests to this exchange.
+        handler:  Callback to handle requests to this exchange.
+        start_listener: Start a listener task that receives and processes
+            messages for handles.
     """
 
     def __init__(
@@ -166,31 +168,35 @@ class ExchangeClient(abc.ABC):
         handler: Callable[[RequestMessage], None] | None,
         start_listener: bool,
     ):
-        self.bound_handles: dict[uuid.UUID, BoundRemoteHandle[Any]] = {}
+        loop = asyncio.get_event_loop()
         if mailbox_id is None:
-            self.mailbox_id: EntityId = self._register_client(name=name)
+            mailbox_id = loop.run_until_complete(
+                self._register_client(name=name)
+            )
         else:
-            self.mailbox_id = mailbox_id
-            if self.status(mailbox_id) != MailboxStatus.ACTIVE:
+            status = loop.run_until_complete(self.status(mailbox_id))
+            if status != MailboxStatus.ACTIVE:
                 raise BadEntityIdError(mailbox_id)
-
+        
+        self.mailbox_id = mailbox_id
         self.request_handler = handler
-
-        self.listener_started = start_listener
+        self.bound_handles: dict[uuid.UUID, BoundRemoteHandle[Any]] = {}
+        
         if start_listener:
-            self._listener_thread = threading.Thread(
-                target=self.listen,
+            self._listener_task = asyncio.create_task(
+                self.listen(),
                 name=f'exchange-{self.mailbox_id.uid}-listener',
             )
-            self._listener_thread.start()
+        else:
+            self._listener_task = None
 
     @abc.abstractmethod
-    def status(self, mailbox_id: EntityId) -> MailboxStatus:
+    async def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of a mailbox in the exchange."""
         ...
 
     @abc.abstractmethod
-    def _register_client(self, *, name: str | None = None) -> ClientId:
+    async def _register_client(self, *, name: str | None = None) -> ClientId:
         """Create a new client identifier and associated mailbox.
 
         Args:
@@ -202,7 +208,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def register_agent(
+    async def register_agent(
         self,
         behavior: type[BehaviorT],
         *,
@@ -223,7 +229,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def terminate(self, uid: EntityId) -> None:
+    async def terminate(self, uid: EntityId) -> None:
         """Close the mailbox for an entity from the exchange.
 
         Note:
@@ -235,7 +241,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def discover(
+    async def discover(
         self,
         behavior: type[Behavior],
         *,
@@ -254,7 +260,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def send(self, uid: EntityId, message: Message) -> None:
+    async def send(self, uid: EntityId, message: Message) -> None:
         """Send a message to a mailbox.
 
         Args:
@@ -268,7 +274,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
 
         This blocks until the next message is received or the mailbox
@@ -286,7 +292,7 @@ class ExchangeClient(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the exchange client.
 
         Stop listening for incoming messages. This should be called before
@@ -299,27 +305,31 @@ class ExchangeClient(abc.ABC):
             them.
         """
         if isinstance(self.mailbox_id, ClientId):
-            self.terminate(self.mailbox_id)
+            await self.terminate(self.mailbox_id)
             logger.debug(f'Terminated client mailbox {self.mailbox_id}')
 
-        if self.listener_started:
-            self._listener_thread.join()
+        if self._listener_task is not None:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
 
     @abc.abstractmethod
     def clone(self) -> ExchangeFactory:
         """Shallow copy exchange to new, unbound version."""
         ...
 
-    def __enter__(self) -> Self:
+    async def __aenter__(self) -> Self:
         return self
 
-    def __exit__(
+    async def __aexit__(
         self: ExchangeClient,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         exc_traceback: TracebackType | None,
     ) -> None:
-        self.close()
+        await self.close()
 
     def __repr__(self) -> str:
         return f'{type(self).__name__}()'
@@ -359,7 +369,7 @@ class ExchangeClient(abc.ABC):
         self.bound_handles[hdl.handle_id] = hdl
         return hdl
 
-    def _handle_request(
+    async def _handle_request(
         self,
         request: RequestMessage,
     ) -> None:
@@ -369,9 +379,9 @@ class ExchangeClient(abc.ABC):
                     f'Client with {self.mailbox_id} cannot fulfill requests.',
                 ),
             )
-            self.send(response.dest, response)
+            await self.send(response.dest, response)
         else:
-            self.request_handler(request)
+            await self.request_handler(request)
 
     def close_bound_handles(self) -> None:
         """Close all handles bound to this mailbox."""
@@ -379,9 +389,9 @@ class ExchangeClient(abc.ABC):
             handle = self.bound_handles.pop(key)
             handle.close(wait_futures=False)
 
-    def _message_handler(self, message: Message) -> None:
+    async def _message_handler(self, message: Message) -> None:
         if isinstance(message, get_args(RequestMessage)):
-            self._handle_request(message)
+            await self._handle_request(message)
         elif isinstance(message, get_args(ResponseMessage)):
             try:
                 handle = self.bound_handles[message.label]
@@ -397,7 +407,7 @@ class ExchangeClient(abc.ABC):
         else:
             raise AssertionError('Unreachable.')
 
-    def listen(self) -> None:
+    async def listen(self) -> None:
         """Listen for new messages in the mailbox and process them.
 
         Request messages are processed via the `request_handler`, and response
@@ -414,7 +424,7 @@ class ExchangeClient(abc.ABC):
         """
         try:
             while True:
-                message = self.recv()
-                self._message_handler(message)
+                message = await self.recv()
+                await self._message_handler(message)
         except MailboxClosedError:
             pass

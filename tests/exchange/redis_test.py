@@ -18,7 +18,8 @@ from academy.message import PingRequest
 from testing.behavior import EmptyBehavior
 
 
-def test_basic_usage(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_basic_usage(mock_redis) -> None:
     unbound_exchange = RedisExchangeFactory('localhost', port=0)
     assert isinstance(unbound_exchange, ExchangeFactory)
 
@@ -27,8 +28,8 @@ def test_basic_usage(mock_redis) -> None:
         assert isinstance(repr(exchange), str)
         assert isinstance(str(exchange), str)
 
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.register_agent(
+        aid = await exchange.register_agent(EmptyBehavior)
+        await exchange.register_agent(
             EmptyBehavior,
             agent_id=aid,
         )  # Idempotency check
@@ -37,44 +38,50 @@ def test_basic_usage(mock_redis) -> None:
         with unbound_exchange.bind_as_agent(agent_id=aid) as mailbox:
             for _ in range(3):
                 message = PingRequest(src=exchange.mailbox_id, dest=aid)
-                exchange.send(aid, message)
-                assert mailbox.recv() == message
+                await exchange.send(aid, message)
+                assert await mailbox.recv() == message
 
-        exchange.terminate(aid)
-        exchange.terminate(aid)  # Idempotency check
+        await exchange.terminate(aid)
+        await exchange.terminate(aid)  # Idempotency check
 
 
-def test_bad_identifier_error(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_bad_identifier_error(mock_redis) -> None:
     with RedisExchangeFactory(
         'localhost',
         port=0,
     ).bind_as_client() as exchange:
         uid = ClientId.new()
         with pytest.raises(BadEntityIdError):
-            exchange.send(uid, PingRequest(src=exchange.mailbox_id, dest=uid))
+            await exchange.send(
+                uid,
+                PingRequest(src=exchange.mailbox_id, dest=uid)
+            )
 
 
-def test_mailbox_closed_error(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_mailbox_closed_error(mock_redis) -> None:
     with RedisExchangeFactory(
         'localhost',
         port=0,
     ).bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
+        aid = await exchange.register_agent(EmptyBehavior)
         with exchange.clone().bind_as_agent(agent_id=aid) as mailbox:
-            exchange.terminate(aid)
+            await exchange.terminate(aid)
             with pytest.raises(MailboxClosedError):
-                exchange.send(aid, PingRequest(src=aid, dest=aid))
+                await exchange.send(aid, PingRequest(src=aid, dest=aid))
             with pytest.raises(MailboxClosedError):
-                mailbox.recv()
+                await mailbox.recv()
 
 
-def test_mailbox_terminated(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_mailbox_terminated(mock_redis) -> None:
     with RedisExchangeFactory(
         'localhost',
         port=0,
     ).bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.terminate(aid)
+        aid = await exchange.register_agent(EmptyBehavior)
+        await exchange.terminate(aid)
         with pytest.raises(BadEntityIdError):
             exchange.clone().bind_as_agent(agent_id=aid)
 
@@ -89,12 +96,13 @@ def test_mailbox_non_existent(mock_redis) -> None:
             exchange.clone().bind_as_agent(agent_id=aid)
 
 
-def test_get_handle_to_client(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_get_handle_to_client(mock_redis) -> None:
     with RedisExchangeFactory(
         'localhost',
         port=0,
     ).bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
+        aid = await exchange.register_agent(EmptyBehavior)
         handle: BoundRemoteHandle[Any] = exchange.get_handle(aid)
         handle.close()
 
@@ -102,12 +110,13 @@ def test_get_handle_to_client(mock_redis) -> None:
             exchange.get_handle(ClientId.new())  # type: ignore[arg-type]
 
 
-def test_mailbox_timeout(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_mailbox_timeout(mock_redis) -> None:
     with RedisExchangeFactory('localhost', port=0).bind_as_client(
         start_listener=False,
     ) as exchange:
         with pytest.raises(TimeoutError):
-            exchange.recv(timeout=0.001)
+            await exchange.recv(timeout=0.001)
 
 
 def test_exchange_serialization(mock_redis) -> None:
@@ -129,16 +138,17 @@ class B(Behavior): ...
 class C(B): ...
 
 
-def test_exchange_discover(mock_redis) -> None:
+@pytest.mark.asyncio
+async def test_exchange_discover(mock_redis) -> None:
     with RedisExchangeFactory(
         'localhost',
         port=0,
     ).bind_as_client() as exchange:
-        bid = exchange.register_agent(B)
-        cid = exchange.register_agent(C)
-        did = exchange.register_agent(C)
-        exchange.terminate(did)
+        bid = await exchange.register_agent(B)
+        cid = await exchange.register_agent(C)
+        did = await exchange.register_agent(C)
+        await exchange.terminate(did)
 
         assert len(exchange.discover(A)) == 0
-        assert exchange.discover(B, allow_subclasses=False) == (bid,)
-        assert exchange.discover(B, allow_subclasses=True) == (bid, cid)
+        assert await exchange.discover(B, allow_subclasses=False) == (bid,)
+        assert await exchange.discover(B, allow_subclasses=True) == (bid, cid)

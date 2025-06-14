@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import uuid
@@ -8,7 +9,7 @@ from typing import Callable
 from typing import get_args
 from typing import TypeVar
 
-import redis
+import redis.asyncio as redis
 
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
@@ -113,7 +114,6 @@ class RedisExchangeClient(ExchangeClient):
             decode_responses=False,
             **self._kwargs,
         )
-        self._client.ping()
 
         super().__init__(
             mailbox_id,
@@ -156,16 +156,15 @@ class RedisExchangeClient(ExchangeClient):
     def _queue_key(self, uid: EntityId) -> str:
         return f'queue:{uid.uid}'
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the exchange interface."""
-        super().close()
-
-        self._client.close()
+        await super().close()
+        await self._client.aclose()
         logger.debug('Closed exchange (%s)', self)
 
-    def status(self, mailbox_id: EntityId) -> MailboxStatus:
+    async def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of mailbox on exchange."""
-        status = self._client.get(self._active_key(mailbox_id))
+        status = await self._client.get(self._active_key(mailbox_id))
         if status is None:
             return MailboxStatus.MISSING
         elif status == _MailboxState.INACTIVE.value:
@@ -173,7 +172,7 @@ class RedisExchangeClient(ExchangeClient):
         else:
             return MailboxStatus.ACTIVE
 
-    def register_agent(
+    async def register_agent(
         self,
         behavior: type[BehaviorT],
         *,
@@ -193,15 +192,15 @@ class RedisExchangeClient(ExchangeClient):
             Unique identifier for the agent's mailbox.
         """
         aid = AgentId.new(name=name) if agent_id is None else agent_id
-        self._client.set(self._active_key(aid), _MailboxState.ACTIVE.value)
-        self._client.set(
+        await self._client.set(self._active_key(aid), _MailboxState.ACTIVE.value)
+        await self._client.set(
             self._behavior_key(aid),
             ','.join(behavior.behavior_mro()),
         )
         logger.debug('Registered %s in %s', aid, self)
         return aid
 
-    def _register_client(
+    async def _register_client(
         self,
         *,
         name: str | None = None,
@@ -215,11 +214,11 @@ class RedisExchangeClient(ExchangeClient):
             Unique identifier for the client's mailbox.
         """
         cid = ClientId.new(name=name)
-        self._client.set(self._active_key(cid), _MailboxState.ACTIVE.value)
+        await self._client.set(self._active_key(cid), _MailboxState.ACTIVE.value)
         logger.debug('Registered %s in %s', cid, self)
         return cid
 
-    def terminate(self, uid: EntityId) -> None:
+    async def terminate(self, uid: EntityId) -> None:
         """Close the mailbox for an entity from the exchange.
 
         Note:
@@ -228,16 +227,16 @@ class RedisExchangeClient(ExchangeClient):
         Args:
             uid: Entity identifier of the mailbox to close.
         """
-        self._client.set(self._active_key(uid), _MailboxState.INACTIVE.value)
+        await self._client.set(self._active_key(uid), _MailboxState.INACTIVE.value)
         # Sending a close sentinel to the queue is a quick way to force
         # the entity waiting on messages to the mailbox to stop blocking.
         # This assumes that only one entity is reading from the mailbox.
-        self._client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
+        await self._client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
         if isinstance(uid, AgentId):
-            self._client.delete(self._behavior_key(uid))
+            await self._client.delete(self._behavior_key(uid))
         logger.debug('Closed mailbox for %s (%s)', uid, self)
 
-    def discover(
+    async def discover(
         self,
         behavior: type[Behavior],
         allow_subclasses: bool = True,
@@ -257,8 +256,8 @@ class RedisExchangeClient(ExchangeClient):
         """
         found: list[AgentId[Any]] = []
         fqp = f'{behavior.__module__}.{behavior.__name__}'
-        for key in self._client.scan_iter('behavior:*'):
-            mro_str = self._client.get(key)
+        for key in await self._client.scan_iter('behavior:*'):
+            mro_str = await self._client.get(key)
             assert isinstance(mro_str, str)
             mro = mro_str.split(',')
             if fqp == mro[0] or (allow_subclasses and fqp in mro):
@@ -266,12 +265,12 @@ class RedisExchangeClient(ExchangeClient):
                 found.append(aid)
         active: list[AgentId[Any]] = []
         for aid in found:
-            status = self._client.get(self._active_key(aid))
+            status = await self._client.get(self._active_key(aid))
             if status == _MailboxState.ACTIVE.value:  # pragma: no branch
                 active.append(aid)
         return tuple(active)
 
-    def send(self, uid: EntityId, message: Message) -> None:
+    async def send(self, uid: EntityId, message: Message) -> None:
         """Send a message to a mailbox.
 
         Args:
@@ -282,16 +281,16 @@ class RedisExchangeClient(ExchangeClient):
             BadEntityIdError: if a mailbox for `uid` does not exist.
             MailboxClosedError: if the mailbox was closed.
         """
-        status = self._client.get(self._active_key(uid))
+        status = await self._client.get(self._active_key(uid))
         if status is None:
             raise BadEntityIdError(uid)
         elif status == _MailboxState.INACTIVE.value:
             raise MailboxClosedError(uid)
         else:
-            self._client.rpush(self._queue_key(uid), message.model_serialize())
+            await self._client.rpush(self._queue_key(uid), message.model_serialize())
             logger.debug('Sent %s to %s', type(message).__name__, uid)
 
-    def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
 
         This blocks until the next message is received or the mailbox
@@ -309,7 +308,7 @@ class RedisExchangeClient(ExchangeClient):
         """
         _timeout = int(timeout) if timeout is not None else 1
         while True:
-            status = self._client.get(
+            status = await self._client.get(
                 self._active_key(self.mailbox_id),
             )
             if status is None:
@@ -321,7 +320,7 @@ class RedisExchangeClient(ExchangeClient):
             elif status == _MailboxState.INACTIVE.value:
                 raise MailboxClosedError(self.mailbox_id)
 
-            raw = self._client.blpop(
+            raw = await self._client.blpop(
                 [self._queue_key(self.mailbox_id)],
                 timeout=_timeout,
             )
