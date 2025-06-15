@@ -55,9 +55,21 @@ class AsyncQueue(Generic[T]):
         """Check if the queue has been closed."""
         return self._closed
 
-    async def get(self) -> T:
-        """Remove and return the next item from the queue (blocking)."""
-        item = await self._queue.get()
+    async def get(self, timeout: float | None = None) -> T:
+        """Remove and return the next item from the queue (blocking).
+
+        Args:
+            timeout: Block at most `timeout` seconds.
+
+        Raises:
+            TimeoutError: if no item was available within `timeout` seconds.
+        """
+        try:
+            item = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # asyncio.TimeoutError is different from TimeoutError in Python
+            # 3.10 and older so we convert the error type.
+            raise TimeoutError() from None
         if item.value is CLOSE_SENTINEL:
             raise QueueClosedError
         return cast(T, item.value)

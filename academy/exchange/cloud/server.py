@@ -70,6 +70,7 @@ _BAD_REQUEST_CODE = 400
 _UNAUTHORIZED_CODE = 401
 _FORBIDDEN_CODE = 403
 _NOT_FOUND_CODE = 404
+_TIMEOUT_CODE = 408
 
 
 class _MailboxManager:
@@ -140,14 +141,20 @@ class _MailboxManager:
                 found.append(aid)
         return found
 
-    async def get(self, client: str | None, uid: EntityId) -> Message:
+    async def get(
+        self,
+        client: str | None,
+        uid: EntityId,
+        *,
+        timeout: float | None = None,
+    ) -> Message:
         if not self.has_permissions(client, uid):
             raise ForbiddenError(
                 'Client does not have correct permissions.',
             )
 
         try:
-            return await self._mailboxes[uid].get()
+            return await self._mailboxes[uid].get(timeout=timeout)
         except KeyError as e:
             raise BadEntityIdError(uid) from e
         except QueueClosedError as e:
@@ -321,9 +328,11 @@ async def _recv_message_route(request: Request) -> Response:
             text='Missing or invalid mailbox ID',
         )
 
+    timeout = data.get('timeout', None)
+
     try:
         client_id = request.headers.get('client_id', None)
-        message = await manager.get(client_id, mailbox_id)
+        message = await manager.get(client_id, mailbox_id, timeout=timeout)
     except BadEntityIdError:
         return Response(status=_NOT_FOUND_CODE, text='Unknown mailbox ID')
     except MailboxClosedError:
@@ -333,6 +342,8 @@ async def _recv_message_route(request: Request) -> Response:
             status=_FORBIDDEN_CODE,
             text='Incorrect permissions',
         )
+    except TimeoutError:
+        return Response(status=_TIMEOUT_CODE, text='Request timeout')
     else:
         return json_response({'message': message.model_dump_json()})
 

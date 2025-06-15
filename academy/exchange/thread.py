@@ -43,7 +43,7 @@ class _ThreadExchangeState(NoPickleMixin):
         self.behaviors: dict[AgentId[Any], type[Behavior]] = {}
 
 
-class ThreadExchangeFactory(ExchangeFactory):
+class ThreadExchangeFactory(ExchangeFactory, NoPickleMixin):
     """Local exchange client factory.
 
     A thread exchange can be used to pass messages between agents running

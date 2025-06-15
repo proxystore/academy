@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import enum
 import logging
 import sys
 import threading
@@ -10,7 +9,6 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 from typing import get_args
-from typing import NamedTuple
 from typing import TypeVar
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
@@ -28,6 +26,8 @@ from academy.exchange import ExchangeFactory
 from academy.exchange import MailboxStatus
 from academy.exchange.queue import Queue
 from academy.exchange.queue import QueueClosedError
+from academy.exchange.redis import _MailboxState
+from academy.exchange.redis import _RedisConnectionInfo
 from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.identifier import EntityId
@@ -49,17 +49,6 @@ _THREAD_START_TIMEOUT = 5
 _THREAD_JOIN_TIMEOUT = 5
 _SERVER_ACK = b'<ACK>'
 _SOCKET_POLL_TIMEOUT_MS = 50
-
-
-class _RedisConnectionInfo(NamedTuple):
-    hostname: str
-    port: int
-    kwargs: dict[str, Any]
-
-
-class _MailboxState(enum.Enum):
-    ACTIVE = 'ACTIVE'
-    INACTIVE = 'INACTIVE'
 
 
 class HybridExchangeFactory(ExchangeFactory):
@@ -408,6 +397,7 @@ class HybridExchangeClient(ExchangeClient, NoPickleMixin):
         assert isinstance(raw, (tuple, list))
         assert len(raw) == 2  # noqa: PLR2004
         if raw[1] == _CLOSE_SENTINEL:  # pragma: no cover
+            self._messages.close()
             raise MailboxClosedError(self.mailbox_id)
         message = BaseMessage.model_deserialize(raw[1])
         assert isinstance(message, get_args(Message))

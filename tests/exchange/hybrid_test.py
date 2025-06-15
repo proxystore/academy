@@ -1,195 +1,98 @@
 from __future__ import annotations
 
 import logging
-import pickle
 import uuid
-from typing import Any
 from unittest import mock
 
-import pytest
-
-from academy.behavior import Behavior
-from academy.exception import BadEntityIdError
-from academy.exception import MailboxClosedError
 from academy.exchange.hybrid import base32_to_uuid
 from academy.exchange.hybrid import HybridExchangeClient
 from academy.exchange.hybrid import HybridExchangeFactory
 from academy.exchange.hybrid import uuid_to_base32
-from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.message import PingRequest
 from academy.socket import open_port
 from testing.behavior import EmptyBehavior
 from testing.constant import TEST_CONNECTION_TIMEOUT
-from testing.constant import TEST_SLEEP
 from testing.constant import TEST_THREAD_JOIN_TIMEOUT
-
-
-def test_open_close_exchange(mock_redis) -> None:
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        assert isinstance(repr(exchange), str)
-        assert isinstance(str(exchange), str)
-
-
-def test_serialize_exchange(mock_redis) -> None:
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        dumped = pickle.dumps(exchange)
-        reconstructed = pickle.loads(dumped)
-        assert isinstance(reconstructed, HybridExchangeFactory)
 
 
 def test_key_namespaces(mock_redis) -> None:
     namespace = 'foo'
     uid = ClientId.new()
-    with HybridExchangeFactory(
+    factory = HybridExchangeFactory(
         redis_host='localhost',
         redis_port=0,
         namespace=namespace,
-    ).bind_as_client() as exchange:
-        assert isinstance(exchange, HybridExchangeClient)
-
-        assert exchange._address_key(uid).startswith(f'{namespace}:')
-        assert exchange._status_key(uid).startswith(f'{namespace}:')
-        assert exchange._queue_key(uid).startswith(f'{namespace}:')
-
-
-def test_send_bad_identifier(mock_redis) -> None:
-    uid = ClientId.new()
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        message = PingRequest(src=exchange.mailbox_id, dest=uid)
-        with pytest.raises(BadEntityIdError):
-            exchange.send(uid, message)
-
-
-def test_send_mailbox_closed(mock_redis) -> None:
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        uid = exchange.register_agent(EmptyBehavior)
-        exchange.terminate(uid)
-        message = PingRequest(src=exchange.mailbox_id, dest=uid)
-        with pytest.raises(MailboxClosedError):
-            exchange.send(uid, message)
-
-
-def test_create_mailbox_bad_identifier(mock_redis) -> None:
-    uid: AgentId[Any] = AgentId.new()
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        with pytest.raises(BadEntityIdError):
-            exchange.clone().bind_as_agent(agent_id=uid)
-
-
-def test_send_to_mailbox_direct(mock_redis) -> None:
-    exchange = HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
     )
-    with exchange.bind_as_client() as client_1:
-        with exchange.bind_as_client(start_listener=False) as client_2:
+    with factory._create_client() as client:
+        assert isinstance(client, HybridExchangeClient)
+
+        assert client._address_key(uid).startswith(f'{namespace}:')
+        assert client._status_key(uid).startswith(f'{namespace}:')
+        assert client._queue_key(uid).startswith(f'{namespace}:')
+
+
+def test_send_to_mailbox_direct(
+    hybrid_exchange_factory: HybridExchangeFactory,
+) -> None:
+    with hybrid_exchange_factory._create_client() as client1:
+        with hybrid_exchange_factory._create_client() as client2:
             message = PingRequest(
-                src=client_1.mailbox_id,
-                dest=client_2.mailbox_id,
+                src=client1.mailbox_id,
+                dest=client2.mailbox_id,
             )
             for _ in range(3):
-                client_1.send(client_2.mailbox_id, message)
-                assert (
-                    client_2.recv(timeout=TEST_CONNECTION_TIMEOUT) == message
-                )
+                client1.send(client2.mailbox_id, message)
+                assert client2.recv(timeout=TEST_CONNECTION_TIMEOUT) == message
 
 
-def test_send_to_mailbox_indirect(mock_redis) -> None:
+def test_send_to_mailbox_indirect(
+    hybrid_exchange_factory: HybridExchangeFactory,
+) -> None:
     messages = 3
-    exchange = HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    )
-
-    with exchange.bind_as_client() as client_1:
-        aid = client_1.register_agent(EmptyBehavior)
-        message = PingRequest(src=client_1.mailbox_id, dest=aid)
+    with hybrid_exchange_factory._create_client() as client1:
+        aid = client1.register_agent(EmptyBehavior)
+        message = PingRequest(src=client1.mailbox_id, dest=aid)
         for _ in range(messages):
-            client_1.send(aid, message)
+            client1.send(aid, message)
 
-    with exchange.bind_as_agent(agent_id=aid) as mailbox:
+    with hybrid_exchange_factory._create_client(mailbox_id=aid) as mailbox:
         for _ in range(messages):
             assert mailbox.recv(timeout=TEST_CONNECTION_TIMEOUT) == message
 
 
-@pytest.mark.skip(reason='Not implemented. Need async for implementation.')
-def test_mailbox_recv_closed(mock_redis) -> None:  # pragma: no cover
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-
-        with exchange.clone().bind_as_agent(agent_id=aid) as mailbox:
-            exchange.terminate(aid)
-
-            with pytest.raises(MailboxClosedError):
-                mailbox.recv(timeout=TEST_SLEEP)
-
-
-def test_mailbox_create_terminated(mock_redis) -> None:
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.terminate(aid)
-
-        with pytest.raises(BadEntityIdError):
-            exchange.clone().bind_as_agent(agent_id=aid)
-
-
-def test_mailbox_redis_error_logging(mock_redis, caplog) -> None:
+def test_mailbox_redis_error_logging(
+    hybrid_exchange_factory: HybridExchangeFactory,
+    caplog,
+) -> None:
     caplog.set_level(logging.ERROR)
     with mock.patch(
         'academy.exchange.hybrid.HybridExchangeClient._pull_messages_from_redis',
         side_effect=RuntimeError('Mock thread error.'),
     ):
-        with HybridExchangeFactory(
-            redis_host='localhost',
-            redis_port=0,
-        ).bind_as_client() as exchange:
-            assert isinstance(exchange, HybridExchangeClient)
-            exchange._redis_thread.join(TEST_THREAD_JOIN_TIMEOUT)
+        with hybrid_exchange_factory._create_client() as client:
+            client._redis_thread.join(TEST_THREAD_JOIN_TIMEOUT)
             assert any(
-                f'Error in redis watcher thread for {exchange.mailbox_id}'
+                f'Error in redis watcher thread for {client.mailbox_id}'
                 in record.message
                 for record in caplog.records
                 if record.levelname == 'ERROR'
             )
 
 
-def test_send_to_mailbox_bad_cached_address(mock_redis) -> None:
+def test_send_to_mailbox_bad_cached_address(
+    hybrid_exchange_factory: HybridExchangeFactory,
+) -> None:
     port1, port2 = open_port(), open_port()
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as client1:
-        assert isinstance(client1, HybridExchangeClient)
-
+    with hybrid_exchange_factory._create_client() as client1:
         aid = client1.register_agent(EmptyBehavior)
 
-        with HybridExchangeFactory(
+        factory1 = HybridExchangeFactory(
             redis_host='localhost',
             redis_port=0,
             ports=[port1],
-        ).bind_as_agent(agent_id=aid) as client2:
+        )
+        with factory1._create_client(mailbox_id=aid) as client2:
             message = PingRequest(
                 src=client1.mailbox_id,
                 dest=client2.mailbox_id,
@@ -203,39 +106,16 @@ def test_send_to_mailbox_bad_cached_address(mock_redis) -> None:
         socket = client1._socket_pool._sockets[address]
         socket.close()
 
-        with HybridExchangeFactory(
+        factory2 = HybridExchangeFactory(
             redis_host='localhost',
             redis_port=0,
             ports=[port2],
-        ).bind_as_agent(agent_id=aid) as client2:
+        )
+        with factory2._create_client(mailbox_id=aid) as client2:
             # This send will try the cached address, fail, catch the error,
             # and retry via redis.
             client1.send(client2.mailbox_id, message)
             assert client2.recv(timeout=TEST_CONNECTION_TIMEOUT) == message
-
-
-class A(Behavior): ...
-
-
-class B(Behavior): ...
-
-
-class C(B): ...
-
-
-def test_exchange_discover(mock_redis) -> None:
-    with HybridExchangeFactory(
-        redis_host='localhost',
-        redis_port=0,
-    ).bind_as_client() as exchange:
-        bid = exchange.register_agent(B)
-        cid = exchange.register_agent(C)
-        did = exchange.register_agent(C)
-        exchange.terminate(did)
-
-        assert len(exchange.discover(A)) == 0
-        assert exchange.discover(B, allow_subclasses=False) == (bid,)
-        assert exchange.discover(B, allow_subclasses=True) == (bid, cid)
 
 
 def test_uuid_encoding() -> None:

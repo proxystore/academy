@@ -29,6 +29,7 @@ from academy.exchange.cloud.config import ExchangeServingConfig
 from academy.exchange.cloud.server import _FORBIDDEN_CODE
 from academy.exchange.cloud.server import _NOT_FOUND_CODE
 from academy.exchange.cloud.server import _run
+from academy.exchange.cloud.server import _TIMEOUT_CODE
 from academy.identifier import AgentId
 from academy.identifier import ClientId
 from academy.identifier import EntityId
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 BehaviorT = TypeVar('BehaviorT', bound=Behavior)
 
 
-class _ConnectionInfo(NamedTuple):
+class _HttpConnectionInfo(NamedTuple):
     host: str
     port: int
     additional_headers: dict[str, str] | None = None
@@ -73,7 +74,7 @@ class HttpExchangeFactory(ExchangeFactory):
         scheme: Literal['http', 'https'] = 'http',
         ssl_verify: str | bool | None = None,
     ) -> None:
-        self._info = _ConnectionInfo(
+        self._info = _HttpConnectionInfo(
             host=host,
             port=port,
             additional_headers=additional_headers,
@@ -108,7 +109,7 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
         self,
         mailbox_id: EntityId,
         session: requests.Session,
-        connection_info: _ConnectionInfo,
+        connection_info: _HttpConnectionInfo,
     ) -> None:
         self._mailbox_id = mailbox_id
         self._session = session
@@ -127,7 +128,7 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
     def new(
         cls,
         *,
-        connection_info: _ConnectionInfo,
+        connection_info: _HttpConnectionInfo,
         mailbox_id: EntityId | None = None,
         name: str | None = None,
     ) -> Self:
@@ -207,7 +208,10 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
         try:
             response = self._session.get(
                 self._message_url,
-                json={'mailbox': self.mailbox_id.model_dump_json()},
+                json={
+                    'mailbox': self.mailbox_id.model_dump_json(),
+                    'timeout': timeout,
+                },
                 timeout=timeout,
             )
         except requests.exceptions.Timeout as e:
@@ -216,6 +220,9 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
             ) from e
         if response.status_code == _FORBIDDEN_CODE:
             raise MailboxClosedError(self.mailbox_id)
+        elif response.status_code == _TIMEOUT_CODE:
+            raise TimeoutError()
+
         response.raise_for_status()
 
         message = BaseMessage.model_from_json(response.json().get('message'))
@@ -268,7 +275,7 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
             self.send(
                 uid,
                 PingRequest(
-                    src=self.uid,
+                    src=self.mailbox_id,
                     dest=uid,
                 ),
             )
@@ -331,12 +338,9 @@ def spawn_http_exchange(
     wait_connection(host, port, timeout=timeout)
     logger.info('Started exchange server!')
 
-    exchange = HttpExchangeFactory(
-        host,
-        port,
-    )
+    factory = HttpExchangeFactory(host, port)
     try:
-        yield exchange
+        yield factory
     finally:
         logger.info('Terminating exchange server...')
         wait = 5

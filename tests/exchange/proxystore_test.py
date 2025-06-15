@@ -12,11 +12,10 @@ from proxystore.store import Store
 from proxystore.store.executor import ProxyAlways
 from proxystore.store.executor import ProxyNever
 
-from academy.exchange import ExchangeFactory
 from academy.exchange import MailboxStatus
 from academy.exchange.cloud.client import HttpExchangeFactory
 from academy.exchange.proxystore import ProxyStoreExchangeFactory
-from academy.exchange.thread import ThreadExchangeClient
+from academy.exchange.thread import ThreadExchangeFactory
 from academy.message import ActionRequest
 from academy.message import ActionResponse
 from academy.message import PingRequest
@@ -43,31 +42,30 @@ def store() -> Generator[Store[LocalConnector], None, None]:
         (lambda x: isinstance(x, str), True),
     ),
 )
-def test_basic_usage(
+def test_wrap_basic_client_functionality(
     should_proxy: Callable[[Any], bool],
     resolve_async: bool,
-    exchange: ThreadExchangeClient,
     store: Store[LocalConnector],
+    thread_exchange_factory: ThreadExchangeFactory,
 ) -> None:
-    wrapped_exchange_unbound = ProxyStoreExchangeFactory(
-        exchange.clone(),  # Fixture is already bound, so need to clone
-        store,
-        should_proxy,
+    wrapped_factory = ProxyStoreExchangeFactory(
+        base=thread_exchange_factory,
+        store=store,
+        should_proxy=should_proxy,
         resolve_async=resolve_async,
     )
 
-    with wrapped_exchange_unbound.bind_as_client() as wrapped_exchange:
-        src = wrapped_exchange.mailbox_id
-        dest = wrapped_exchange.register_agent(EmptyBehavior)
-        status = wrapped_exchange.status(dest)
-        assert status == MailboxStatus.ACTIVE
+    with wrapped_factory._create_client() as wrapped_client1:
+        src = wrapped_client1.mailbox_id
+        dest = wrapped_client1.register_agent(EmptyBehavior)
+        assert wrapped_client1.status(dest) == MailboxStatus.ACTIVE
 
-        mailbox = wrapped_exchange_unbound.bind_as_agent(agent_id=dest)
-        assert mailbox.mailbox_id == dest
+        wrapped_client2 = wrapped_factory._create_client(mailbox_id=dest)
+        assert wrapped_client2.mailbox_id == dest
 
         ping = PingRequest(src=src, dest=dest)
-        wrapped_exchange.send(dest, ping)
-        assert mailbox.recv() == ping
+        wrapped_client1.send(dest, ping)
+        assert wrapped_client2.recv() == ping
 
         request = ActionRequest(
             src=src,
@@ -76,9 +74,9 @@ def test_basic_usage(
             pargs=('value', 123),
             kargs={'foo': 'value', 'bar': 123},
         )
-        wrapped_exchange.send(dest, request)
+        wrapped_client1.send(dest, request)
 
-        received = mailbox.recv()
+        received = wrapped_client2.recv()
         assert isinstance(received, ActionRequest)
         assert request.tag == received.tag
 
@@ -93,9 +91,9 @@ def test_basic_usage(
             assert old == new
 
         response = request.response('result')
-        wrapped_exchange.send(dest, response)
+        wrapped_client1.send(dest, response)
 
-        received = mailbox.recv()
+        received = wrapped_client2.recv()
         assert isinstance(received, ActionResponse)
         assert response.tag == received.tag
         assert (type(received.result) is Proxy) == should_proxy(
@@ -103,48 +101,23 @@ def test_basic_usage(
         )
         assert response.result == received.result
 
-        assert wrapped_exchange.discover(EmptyBehavior) == (dest,)
+        assert wrapped_client1.discover(EmptyBehavior) == (dest,)
 
-        mailbox.close()
-        wrapped_exchange.terminate(src)
-        wrapped_exchange.terminate(dest)
+        wrapped_client2.close()
 
 
-def test_serialize(
+def test_serialize_factory(
     http_exchange_server: tuple[str, int],
     store: Store[LocalConnector],
 ) -> None:
     host, port = http_exchange_server
 
-    unbound_base_exchange = HttpExchangeFactory(host, port)
-    unbound_proxystore_exchange = ProxyStoreExchangeFactory(
-        unbound_base_exchange,
-        store,
+    factory = HttpExchangeFactory(host, port)
+    wrapped_factory = ProxyStoreExchangeFactory(
+        base=factory,
+        store=store,
         should_proxy=ProxyAlways(),
     )
-    dumped = pickle.dumps(unbound_proxystore_exchange)
+    dumped = pickle.dumps(wrapped_factory)
     reconstructed = pickle.loads(dumped)
     assert isinstance(reconstructed, ProxyStoreExchangeFactory)
-
-    with unbound_proxystore_exchange.bind_as_client() as exchange:
-        dumped = pickle.dumps(exchange)
-        reconstructed = pickle.loads(dumped)
-        assert isinstance(reconstructed, ProxyStoreExchangeFactory)
-        assert isinstance(reconstructed.exchange, HttpExchangeFactory)
-
-
-def test_clone(
-    exchange: ThreadExchangeClient,
-    store: Store[LocalConnector],
-) -> None:
-    wrapped_exchange_unbound = ProxyStoreExchangeFactory(
-        exchange.clone(),  # Fixture is already bound, so need to clone
-        store,
-        ProxyAlways(),
-    )
-
-    with wrapped_exchange_unbound.bind_as_client() as wrapped:
-        cloned = wrapped.clone()
-
-        assert isinstance(cloned, ProxyStoreExchangeFactory)
-        assert isinstance(cloned.exchange, ExchangeFactory)

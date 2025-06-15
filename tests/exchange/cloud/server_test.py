@@ -29,6 +29,7 @@ from academy.exchange.cloud.server import _main
 from academy.exchange.cloud.server import _NOT_FOUND_CODE
 from academy.exchange.cloud.server import _OKAY_CODE
 from academy.exchange.cloud.server import _run
+from academy.exchange.cloud.server import _TIMEOUT_CODE
 from academy.exchange.cloud.server import _UNAUTHORIZED_CODE
 from academy.exchange.cloud.server import create_app
 from academy.identifier import AgentId
@@ -236,6 +237,22 @@ async def test_recv_mailbox_validation_error(cli) -> None:
     )
     assert response.status == _NOT_FOUND_CODE
     assert await response.text() == 'Unknown mailbox ID'
+
+
+@pytest.mark.asyncio
+async def test_recv_timeout_error(cli) -> None:
+    uid = ClientId.new()
+    response = await cli.post(
+        '/mailbox',
+        json={'mailbox': uid.model_dump_json()},
+    )
+    assert response.status == _OKAY_CODE
+
+    response = await cli.get(
+        '/message',
+        json={'mailbox': uid.model_dump_json(), 'timeout': 0.001},
+    )
+    assert response.status == _TIMEOUT_CODE
 
 
 @pytest.mark.asyncio
