@@ -1,15 +1,22 @@
+# ruff: noqa: D102
 from __future__ import annotations
 
 import base64
 import enum
 import logging
+import sys
 import threading
 import uuid
 from collections.abc import Iterable
 from typing import Any
-from typing import Callable
 from typing import get_args
+from typing import NamedTuple
 from typing import TypeVar
+
+if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
+    from typing import Self
+else:  # pragma: <3.11 cover
+    from typing_extensions import Self
 
 import redis
 
@@ -26,7 +33,7 @@ from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import BaseMessage
 from academy.message import Message
-from academy.message import RequestMessage
+from academy.serialize import NoPickleMixin
 from academy.socket import address_by_hostname
 from academy.socket import address_by_interface
 from academy.socket import SimpleSocket
@@ -44,13 +51,19 @@ _SERVER_ACK = b'<ACK>'
 _SOCKET_POLL_TIMEOUT_MS = 50
 
 
+class _RedisConnectionInfo(NamedTuple):
+    hostname: str
+    port: int
+    kwargs: dict[str, Any]
+
+
 class _MailboxState(enum.Enum):
     ACTIVE = 'ACTIVE'
     INACTIVE = 'INACTIVE'
 
 
 class HybridExchangeFactory(ExchangeFactory):
-    """Hybrid exchange.
+    """Hybrid exchange client factory.
 
     The hybrid exchange uses peer-to-peer communication via TCP and a
     central Redis server for mailbox state and queueing messages for
@@ -59,19 +72,16 @@ class HybridExchangeFactory(ExchangeFactory):
     Args:
         redis_host: Redis server hostname.
         redis_port: Redis server port.
+        redis_kwargs: Extra keyword arguments to pass to
+            [`redis.Redis()`][redis.Redis].
         interface: Network interface use for peer-to-peer communication. If
             `None`, the hostname of the local host is used.
         namespace: Redis key namespace. If `None` a random key prefix is
             generated.
-        redis_kwargs: Extra keyword arguments to pass to
-            [`redis.Redis()`][redis.Redis].
         ports: An iterable of ports to give each client a unique port from a
             user defined set. A StopIteration exception will be raised in
-            bind_* methods if the number of clients in the process is greater
-            than the length of the iterable.
-
-    Raises:
-        redis.exceptions.ConnectionError: If the Redis server is not reachable.
+            `create_*_client()` methods if the number of clients in the process
+            is greater than the length of the iterable.
     """
 
     def __init__(  # noqa: PLR0913
@@ -79,9 +89,9 @@ class HybridExchangeFactory(ExchangeFactory):
         redis_host: str,
         redis_port: int,
         *,
+        redis_kwargs: dict[str, Any] | None = None,
         interface: str | None = None,
         namespace: str | None = 'default',
-        redis_kwargs: dict[str, Any] | None = None,
         ports: Iterable[int] | None = None,
     ) -> None:
         self._namespace = (
@@ -90,132 +100,54 @@ class HybridExchangeFactory(ExchangeFactory):
             else uuid_to_base32(uuid.uuid4())
         )
         self._interface = interface
-        self._redis_host = redis_host
-        self._redis_port = redis_port
-        self._redis_kwargs = redis_kwargs if redis_kwargs is not None else {}
+        self._redis_info = _RedisConnectionInfo(
+            redis_host,
+            redis_port,
+            redis_kwargs if redis_kwargs is not None else {},
+        )
         self._ports = None if ports is None else iter(ports)
 
-    def _bind(
+    def _create_client(
         self,
         mailbox_id: EntityId | None = None,
-        name: str | None = None,
-        handler: Callable[[RequestMessage], None] | None = None,
         *,
-        start_listener: bool,
+        name: str | None = None,
     ) -> HybridExchangeClient:
-        return HybridExchangeClient(
-            self,
+        return HybridExchangeClient.new(
+            interface=self._interface,
             mailbox_id=mailbox_id,
             name=name,
-            handler=handler,
-            start_listener=start_listener,
+            namespace=self._namespace,
             port=None if self._ports is None else next(self._ports),
+            redis_info=self._redis_info,
         )
 
 
-class HybridExchangeClient(ExchangeClient):
-    """Hybrid exchange.
-
-    The hybrid exchange uses peer-to-peer communication via TCP and a
-    central Redis server for mailbox state and queueing messages for
-    offline entities.
-
-    Args:
-        unbound: An unbound exchange client containing information to
-            connect to the exchange.
-        mailbox_id: Identifier of the mailbox on the exchange. If there is
-            not an id provided, the exchange will create a new client mail-
-            box.
-        name: Display name of mailbox on exchange.
-        handler:  Callback to handler requests to this exchange.
-        start_listener: Start the listener thread to multiplex messages to
-            handles.
-        port: What port to listen for direct messages on. If none, assigned
-            to any open port.
-
-    Raises:
-        redis.exceptions.ConnectionError: If the Redis server is not reachable.
-    """
-
-    _address_cache: dict[EntityId, str]
-    _redis_client: redis.Redis
-    _socket_pool: _SocketPool
+class HybridExchangeClient(ExchangeClient, NoPickleMixin):
+    """Hybrid exchange client bound to a specific mailbox."""
 
     def __init__(  # noqa: PLR0913
         self,
-        unbound: HybridExchangeFactory,
-        mailbox_id: EntityId | None = None,
+        mailbox_id: EntityId,
+        redis_client: redis.Redis,
         *,
-        name: str | None = None,
-        handler: Callable[[RequestMessage], None] | None = None,
-        start_listener: bool,
+        redis_info: _RedisConnectionInfo,
+        namespace: str,
+        interface: str | None = None,
         port: int | None = None,
     ) -> None:
-        self._namespace = unbound._namespace
-        self._interface = unbound._interface
-        self._redis_host = unbound._redis_host
-        self._redis_port = unbound._redis_port
-        self._redis_kwargs = unbound._redis_kwargs
-
+        self._mailbox_id = mailbox_id
+        self._redis_client = redis_client
+        self._redis_info = redis_info
+        self._namespace = namespace
+        self._interface = interface
         # How can we pass the port through the bind method?
         self._port = port
 
-        self._init_connections()
+        self._address_cache: dict[EntityId, str] = {}
         self._messages: Queue[Message] = Queue()
-
-        try:
-            super().__init__(
-                mailbox_id,
-                name=name,
-                handler=handler,
-                start_listener=start_listener,
-            )
-        except Exception as e:
-            self._redis_client.close()
-            self._socket_pool.close()
-            raise e
-
-        self._start_mailbox_server()
-
-    def _init_connections(self) -> None:
-        self._address_cache = {}
-        self._redis_client = redis.Redis(
-            host=self._redis_host,
-            port=self._redis_port,
-            decode_responses=False,
-            **self._redis_kwargs,
-        )
-        self._redis_client.ping()
         self._socket_pool = _SocketPool()
-
-    def __reduce__(
-        self,
-    ) -> tuple[
-        type[HybridExchangeFactory],
-        tuple[str, int],
-        dict[str, Any],
-    ]:
-        state = {
-            '_redis_kwargs': self._redis_kwargs,
-            '_interface': self._interface,
-            '_namespace': self._namespace,
-        }
-        return (
-            HybridExchangeFactory,
-            (self._redis_host, self._redis_port),
-            state,
-        )
-
-    def __repr__(self) -> str:
-        redis_addr = f'{self._redis_host}:{self._redis_port}'
-        return (
-            f'{type(self).__name__}(namespace={self._namespace}, '
-            f'redis={redis_addr})'
-        )
-
-    def __str__(self) -> str:
-        redis_addr = f'{self._redis_host}:{self._redis_port}'
-        return f'{type(self).__name__}<{redis_addr}; {self._namespace}>'
+        self._start_mailbox_server()
 
     def _address_key(self, uid: EntityId) -> str:
         return f'{self._namespace}:address:{uuid_to_base32(uid.uid)}'
@@ -229,98 +161,73 @@ class HybridExchangeClient(ExchangeClient):
     def _queue_key(self, uid: EntityId) -> str:
         return f'{self._namespace}:queue:{uuid_to_base32(uid.uid)}'
 
+    @classmethod
+    def new(  # noqa: PLR0913
+        cls,
+        *,
+        namespace: str,
+        redis_info: _RedisConnectionInfo,
+        interface: str | None = None,
+        mailbox_id: EntityId | None = None,
+        name: str | None = None,
+        port: int | None = None,
+    ) -> Self:
+        """Instantiate a new client.
+
+        Args:
+            namespace: Redis key namespace.
+            redis_info: Redis connection information.
+            interface: Network interface use for peer-to-peer communication.
+                If `None`, the hostname of the local host is used.
+            mailbox_id: Bind the client to the specific mailbox. If `None`,
+                a new user will be registered and the client will be bound
+                to that mailbox.
+            name: Display name of the client if `mailbox_id` is `None`.
+            port: Port to listen for peer connection on.
+
+        Returns:
+            An instantiated client bound to a specific mailbox.
+
+        Raises:
+            redis.exceptions.ConnectionError: If the Redis server is not
+                reachable.
+        """
+        client = redis.Redis(
+            host=redis_info.hostname,
+            port=redis_info.port,
+            decode_responses=False,
+            **redis_info.kwargs,
+        )
+        # Ensure the redis server is reachable else fail early
+        client.ping()
+
+        if mailbox_id is None:
+            mailbox_id = ClientId.new(name=name)
+            client.set(
+                f'{namespace}:status:{uuid_to_base32(mailbox_id.uid)}',
+                _MailboxState.ACTIVE.value,
+            )
+            logger.info('Registered %s in exchange', mailbox_id)
+        return cls(
+            mailbox_id,
+            client,
+            redis_info=redis_info,
+            namespace=namespace,
+            interface=interface,
+            port=port,
+        )
+
+    @property
+    def mailbox_id(self) -> EntityId:
+        return self._mailbox_id
+
     def close(self) -> None:
-        """Close the exchange interface."""
         # This is necessary to get the listener thread to exit.
         # This should be replaced in the async implementation
         self._messages.close()
-
-        super().close()
-
         self._close_mailbox_server()
         self._redis_client.close()
         self._socket_pool.close()
-
-    def status(self, mailbox_id: EntityId) -> MailboxStatus:
-        """Check status of mailbox on exchange."""
-        status = self._redis_client.get(self._status_key(mailbox_id))
-        if status is None:
-            return MailboxStatus.MISSING
-        elif status == _MailboxState.INACTIVE.value:
-            return MailboxStatus.TERMINATED
-        else:
-            return MailboxStatus.ACTIVE
-
-    def register_agent(
-        self,
-        behavior: type[BehaviorT],
-        *,
-        agent_id: AgentId[BehaviorT] | None = None,
-        name: str | None = None,
-    ) -> AgentId[BehaviorT]:
-        """Create a new agent identifier and associated mailbox.
-
-        Args:
-            behavior: Type of the behavior this agent will implement.
-            agent_id: Specify the ID of the agent. Randomly generated
-                default.
-            name: Optional human-readable name for the agent. Ignored if
-                `agent_id` is provided.
-
-        Returns:
-            Unique identifier for the agent's mailbox.
-        """
-        aid = AgentId.new(name=name) if agent_id is None else agent_id
-        self._redis_client.set(
-            self._status_key(aid),
-            _MailboxState.ACTIVE.value,
-        )
-        self._redis_client.set(
-            self._behavior_key(aid),
-            ','.join(behavior.behavior_mro()),
-        )
-        return aid
-
-    def _register_client(
-        self,
-        *,
-        name: str | None = None,
-    ) -> ClientId:
-        """Create a new client identifier and associated mailbox.
-
-        Args:
-            name: Optional human-readable name for the client.
-
-        Returns:
-            Unique identifier for the client's mailbox.
-        """
-        cid = ClientId.new(name=name)
-        self._redis_client.set(
-            self._status_key(cid),
-            _MailboxState.ACTIVE.value,
-        )
-        logger.debug('Registered %s in %s', cid, self)
-        return cid
-
-    def terminate(self, uid: EntityId) -> None:
-        """Close the mailbox for an entity from the exchange.
-
-        This sets the state of the mailbox to inactive in the Redis server,
-        and deletes any queued messages in Redis.
-
-        Args:
-            uid: Entity identifier of the mailbox to close.
-        """
-        self._redis_client.set(
-            self._status_key(uid),
-            _MailboxState.INACTIVE.value,
-        )
-        # Sending a close sentinel to the queue is a quick way to force
-        # the entity waiting on messages to the mailbox to stop blocking.
-        # This assumes that only one entity is reading from the mailbox.
-        self._redis_client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
-        if isinstance(uid, AgentId):
-            self._redis_client.delete(self._behavior_key(uid))
 
     def discover(
         self,
@@ -328,19 +235,6 @@ class HybridExchangeClient(ExchangeClient):
         *,
         allow_subclasses: bool = True,
     ) -> tuple[AgentId[Any], ...]:
-        """Discover peer agents with a given behavior.
-
-        Warning:
-            This method is O(n) and scans all keys in the Redis server.
-
-        Args:
-            behavior: Behavior type of interest.
-            allow_subclasses: Return agents implementing subclasses of the
-                behavior.
-
-        Returns:
-            Tuple of agent IDs implementing the behavior.
-        """
         found: list[AgentId[Any]] = []
         fqp = f'{behavior.__module__}.{behavior.__name__}'
         for key in self._redis_client.scan_iter(
@@ -361,6 +255,38 @@ class HybridExchangeClient(ExchangeClient):
                 active.append(aid)
         return tuple(active)
 
+    def factory(self) -> HybridExchangeFactory:
+        return HybridExchangeFactory(
+            redis_host=self._redis_info.hostname,
+            redis_port=self._redis_info.port,
+            redis_kwargs=self._redis_info.kwargs,
+            interface=self._interface,
+            namespace=self._namespace,
+        )
+
+    def recv(self, timeout: float | None = None) -> Message:
+        try:
+            return self._messages.get(timeout=timeout)
+        except QueueClosedError:
+            raise MailboxClosedError(self.mailbox_id) from None
+
+    def register_agent(
+        self,
+        behavior: type[BehaviorT],
+        *,
+        name: str | None = None,
+    ) -> AgentId[BehaviorT]:
+        aid: AgentId[Any] = AgentId.new(name=name)
+        self._redis_client.set(
+            self._status_key(aid),
+            _MailboxState.ACTIVE.value,
+        )
+        self._redis_client.set(
+            self._behavior_key(aid),
+            ','.join(behavior.behavior_mro()),
+        )
+        return aid
+
     def _send_direct(self, address: str, message: Message) -> None:
         self._socket_pool.send(address, message.model_serialize())
         logger.debug(
@@ -371,23 +297,6 @@ class HybridExchangeClient(ExchangeClient):
         )
 
     def send(self, uid: EntityId, message: Message) -> None:
-        """Send a message to a mailbox.
-
-        To send a message, the client first checks that the state of the
-        mailbox in Redis is active; otherwise, an error is raised. Then,
-        the client checks to see if the peer entity is available by
-        checking for an address of the peer in Redis. If the peer's address
-        is found, the message is sent directly to the peer via ZMQ; otherwise,
-        the message is put in a Redis queue for later retrieval.
-
-        Args:
-            uid: Destination address of the message.
-            message: Message to send.
-
-        Raises:
-            BadEntityIdError: if a mailbox for `uid` does not exist.
-            MailboxClosedError: if the mailbox was closed.
-        """
         address = self._address_cache.get(uid, None)
         if address is not None:
             try:
@@ -434,6 +343,27 @@ class HybridExchangeClient(ExchangeClient):
                 type(message).__name__,
                 uid,
             )
+
+    def status(self, uid: EntityId) -> MailboxStatus:
+        status = self._redis_client.get(self._status_key(uid))
+        if status is None:
+            return MailboxStatus.MISSING
+        elif status == _MailboxState.INACTIVE.value:
+            return MailboxStatus.TERMINATED
+        else:
+            return MailboxStatus.ACTIVE
+
+    def terminate(self, uid: EntityId) -> None:
+        self._redis_client.set(
+            self._status_key(uid),
+            _MailboxState.INACTIVE.value,
+        )
+        # Sending a close sentinel to the queue is a quick way to force
+        # the entity waiting on messages to the mailbox to stop blocking.
+        # This assumes that only one entity is reading from the mailbox.
+        self._redis_client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
+        if isinstance(uid, AgentId):
+            self._redis_client.delete(self._behavior_key(uid))
 
     def _start_mailbox_server(self) -> None:
         self._closed = threading.Event()
@@ -554,37 +484,6 @@ class HybridExchangeClient(ExchangeClient):
                 'Redis watcher thread failed to exit within '
                 f'{_THREAD_JOIN_TIMEOUT} seconds.',
             )
-
-    def recv(self, timeout: float | None = None) -> Message:
-        """Receive the next message in the mailbox.
-
-        This blocks until the next message is received or the mailbox
-        is closed.
-
-        Args:
-            timeout: Optional timeout in seconds to wait for the next
-                message. If `None`, the default, block forever until the
-                next message or the mailbox is closed. Note that this will
-                be cast to an int which is required by the Redis API.
-
-        Raises:
-            MailboxClosedError: if the mailbox was closed.
-            TimeoutError: if a `timeout` was specified and exceeded.
-        """
-        try:
-            return self._messages.get(timeout=timeout)
-        except QueueClosedError:
-            raise MailboxClosedError(self.mailbox_id) from None
-
-    def clone(self) -> HybridExchangeFactory:
-        """Shallow copy exchange to new, unbound version."""
-        return HybridExchangeFactory(
-            self._redis_host,
-            self._redis_port,
-            interface=self._interface,
-            namespace=self._namespace,
-            redis_kwargs=self._redis_kwargs,
-        )
 
 
 class _SocketPool:

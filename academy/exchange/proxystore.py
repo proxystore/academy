@@ -1,3 +1,4 @@
+# ruff: noqa: D102
 from __future__ import annotations
 
 import functools
@@ -18,12 +19,11 @@ from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
 from academy.exchange import MailboxStatus
 from academy.identifier import AgentId
-from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import ActionRequest
 from academy.message import ActionResponse
 from academy.message import Message
-from academy.message import RequestMessage
+from academy.serialize import NoPickleMixin
 
 BehaviorT = TypeVar('BehaviorT', bound=Behavior)
 
@@ -65,44 +65,45 @@ def _proxy_mapping(
 
 
 class ProxyStoreExchangeFactory(ExchangeFactory):
-    """Proxystore exchange not bound to mailbox.
+    """ProxStore exchange client factory.
 
-    A proxystore exchange is used to wrap an underlying exchange so
+    A ProxyStore exchange is used to wrap an underlying exchange so
     large objects may be passed by reference.
+
+    Args:
+        base: Base exchange factory.
+        store: Store to use for proxying data.
+        should_proxy: A callable that returns `True` if an object should be
+            proxied. This is applied to every positional and keyword argument
+            and result value.
+        resolve_async: Resolve proxies asynchronously when received.
     """
 
     def __init__(
         self,
-        exchange: ExchangeFactory,
+        base: ExchangeFactory,
         store: Store[Any] | None,
         should_proxy: Callable[[Any], bool],
         *,
         resolve_async: bool = False,
     ) -> None:
-        self.exchange = exchange
+        self.base = base
         self.store = store
         self.should_proxy = should_proxy
         self.resolve_async = resolve_async
 
-    def _bind(
+    def _create_client(
         self,
         mailbox_id: EntityId | None = None,
-        name: str | None = None,
-        handler: Callable[[RequestMessage], None] | None = None,
         *,
-        start_listener: bool,
+        name: str | None = None,
     ) -> ProxyStoreExchangeClient:
         # If store was none because of pickling,
         # the __setstate__ must be called before bind.
         assert self.store is not None
-
+        client = (self.base._create_client(mailbox_id, name=name),)
         return ProxyStoreExchangeClient(
-            self.exchange._bind(
-                mailbox_id,
-                name=name,
-                handler=handler,
-                start_listener=start_listener,
-            ),
+            client,
             self.store,
             self.should_proxy,
             resolve_async=self.resolve_async,
@@ -126,124 +127,29 @@ class ProxyStoreExchangeFactory(ExchangeFactory):
         self.__dict__.update(state)
 
 
-class ProxyStoreExchangeClient(ExchangeClient):
-    """Wrap an Exchange with ProxyStore support.
-
-    Sending large action payloads via the exchange can result in considerable
-    slowdowns. This Exchange wrapper can replace arguments in action requests
-    and results in action responses with proxies to reduce communication
-    costs.
-
-    Args:
-        exchange: Exchange to wrap.
-        store: Store to use for proxying data.
-        should_proxy: A callable that returns `True` if an object should be
-            proxied. This is applied to every positional and keyword argument
-            and result value.
-        resolve_async: Resolve proxies asynchronously when received.
-    """
+class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
+    """ProxyStore exchange client bound to a specific mailbox."""
 
     def __init__(
         self,
-        exchange: ExchangeClient,
+        client: ExchangeClient,
         store: Store[Any],
         should_proxy: Callable[[Any], bool],
         *,
         resolve_async: bool = False,
     ) -> None:
-        self.exchange = exchange
+        self.client = client
         self.store = store
         self.should_proxy = should_proxy
         self.resolve_async = resolve_async
         register_store(store, exist_ok=True)
 
-        # Forward properties from exchange
-        self.mailbox_id = self.exchange.mailbox_id
-        self.bound_handles = self.exchange.bound_handles
-        self.request_handler = self.exchange.request_handler
-
-    def __reduce__(
-        self,
-    ) -> tuple[
-        type[ProxyStoreExchangeFactory],
-        tuple[Any, ...],
-        dict[str, Any],
-    ]:
-        state = {
-            'exchange': self.exchange,
-            'store_config': self.store.config(),
-            'resolve_async': self.resolve_async,
-            'should_proxy': self.should_proxy,
-        }
-
-        return (
-            ProxyStoreExchangeFactory,
-            (self.exchange, None, self.should_proxy),
-            state,
-        )
+    @property
+    def mailbox_id(self) -> EntityId:
+        return self.client.mailbox_id
 
     def close(self) -> None:
-        """Close the exchange client.
-
-        Note:
-            This does not alter the state of the exchange.
-        """
-        self.exchange.close()
-
-    def status(self, mailbox_id: EntityId) -> MailboxStatus:
-        """Check status of mailbox on exchange."""
-        return self.exchange.status(mailbox_id)
-
-    def register_agent(
-        self,
-        behavior: type[BehaviorT],
-        *,
-        agent_id: AgentId[BehaviorT] | None = None,
-        name: str | None = None,
-    ) -> AgentId[BehaviorT]:
-        """Create a new agent identifier and associated mailbox.
-
-        Args:
-            behavior: Type of the behavior this agent will implement.
-            agent_id: Specify the ID of the agent. Randomly generated
-                default.
-            name: Optional human-readable name for the agent. Ignored if
-                `agent_id` is provided.
-
-        Returns:
-            Unique identifier for the agent's mailbox.
-        """
-        return self.exchange.register_agent(
-            behavior,
-            agent_id=agent_id,
-            name=name,
-        )
-
-    def _register_client(
-        self,
-        *,
-        name: str | None = None,
-    ) -> ClientId:
-        """Create a new client identifier and associated mailbox.
-
-        Args:
-            name: Optional human-readable name for the client.
-
-        Returns:
-            Unique identifier for the client's mailbox.
-        """
-        raise RuntimeError('Unreachable private method.')  # pragma: no cover
-
-    def terminate(self, uid: EntityId) -> None:
-        """Close the mailbox for an entity from the exchange.
-
-        Note:
-            This method is a no-op if the mailbox does not exist.
-
-        Args:
-            uid: Entity identifier of the mailbox to close.
-        """
-        self.exchange.terminate(uid)
+        self.client.close()
 
     def discover(
         self,
@@ -251,32 +157,42 @@ class ProxyStoreExchangeClient(ExchangeClient):
         *,
         allow_subclasses: bool = True,
     ) -> tuple[AgentId[Any], ...]:
-        """Discover peer agents with a given behavior.
-
-        Args:
-            behavior: Behavior type of interest.
-            allow_subclasses: Return agents implementing subclasses of the
-                behavior.
-
-        Returns:
-            Tuple of agent IDs implementing the behavior.
-        """
-        return self.exchange.discover(
+        return self.client.discover(
             behavior,
             allow_subclasses=allow_subclasses,
         )
 
+    def factory(self) -> ProxyStoreExchangeFactory:
+        return ProxyStoreExchangeFactory(
+            self.client.factory(),
+            self.store,
+            should_proxy=self.should_proxy,
+            resolve_async=self.resolve_async,
+        )
+
+    def recv(self, timeout: float | None = None) -> Message:
+        message = self.client.recv(timeout)
+        if self.resolve_async and isinstance(message, ActionRequest):
+            for arg in (*message.pargs, *message.kargs.values()):
+                if type(arg) is Proxy:
+                    resolve_async(arg)
+        elif (
+            self.resolve_async
+            and isinstance(message, ActionResponse)
+            and type(message.result) is Proxy
+        ):
+            resolve_async(message.result)
+        return message
+
+    def register_agent(
+        self,
+        behavior: type[BehaviorT],
+        *,
+        name: str | None = None,
+    ) -> AgentId[BehaviorT]:
+        return self.client.register_agent(behavior, name=name)
+
     def send(self, uid: EntityId, message: Message) -> None:
-        """Send a message to a mailbox.
-
-        Args:
-            uid: Destination address of the message.
-            message: Message to send.
-
-        Raises:
-            BadEntityIdError: if a mailbox for `uid` does not exist.
-            MailboxClosedError: if the mailbox was closed.
-        """
         if isinstance(message, ActionRequest):
             message.pargs = _proxy_iterable(
                 message.pargs,
@@ -295,41 +211,10 @@ class ProxyStoreExchangeClient(ExchangeClient):
                 self.should_proxy,
             )
 
-        self.exchange.send(uid, message)
+        self.client.send(uid, message)
 
-    def recv(self, timeout: float | None = None) -> Message:
-        """Receive the next message in the mailbox.
+    def status(self, uid: EntityId) -> MailboxStatus:
+        return self.client.status(uid)
 
-        This blocks until the next message is received or the mailbox
-        is closed.
-
-        Args:
-            timeout: Optional timeout in seconds to wait for the next
-                message. If `None`, the default, block forever until the
-                next message or the mailbox is closed.
-
-        Raises:
-            MailboxClosedError: if the mailbox was closed.
-            TimeoutError: if a `timeout` was specified and exceeded.
-        """
-        message = self.exchange.recv(timeout)
-        if self.resolve_async and isinstance(message, ActionRequest):
-            for arg in (*message.pargs, *message.kargs.values()):
-                if type(arg) is Proxy:
-                    resolve_async(arg)
-        elif (
-            self.resolve_async
-            and isinstance(message, ActionResponse)
-            and type(message.result) is Proxy
-        ):
-            resolve_async(message.result)
-        return message
-
-    def clone(self) -> ProxyStoreExchangeFactory:
-        """Shallow copy exchange to new, unbound version."""
-        return ProxyStoreExchangeFactory(
-            self.exchange.clone(),
-            self.store,
-            self.should_proxy,
-            resolve_async=self.resolve_async,
-        )
+    def terminate(self, uid: EntityId) -> None:
+        self.client.terminate(uid)

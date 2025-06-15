@@ -8,8 +8,9 @@ import pytest
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
-from academy.exchange import ExchangeFactory
+from academy.exchange import MailboxStatus
+from academy.exchange.thread import _ThreadExchangeState
+from academy.exchange.thread import ThreadExchangeClient
 from academy.exchange.thread import ThreadExchangeFactory
 from academy.identifier import AgentId
 from academy.identifier import ClientId
@@ -17,58 +18,70 @@ from academy.message import PingRequest
 from testing.behavior import EmptyBehavior
 
 
-def test_basic_usage() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        assert isinstance(exchange, ExchangeClient)
-        assert isinstance(repr(exchange), str)
-        assert isinstance(str(exchange), str)
-        assert isinstance(exchange.mailbox_id, ClientId)
+def test_factory_create_client() -> None:
+    with ThreadExchangeFactory().create_user_client():
+        pass
 
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.register_agent(EmptyBehavior, agent_id=aid)
-        assert isinstance(aid, AgentId)
 
+def test_create_client() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client1:
+        # When mailbox_id is not provided to.new(), a new ClientID should
+        # be created and registered in the exchange.
+        assert isinstance(client1.mailbox_id, ClientId)
+
+    with ThreadExchangeClient(client1.mailbox_id, state=state) as client2:
+        assert client1.mailbox_id == client2.mailbox_id
+
+
+def test_register_agent() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
+        agent_id = client.register_agent(EmptyBehavior)
+        assert client.status(agent_id) == MailboxStatus.ACTIVE
+
+
+def test_create_factory() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
+        factory = client.factory()
+        assert isinstance(factory, ThreadExchangeFactory)
+
+
+def test_send_recv() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
         for _ in range(3):
             message = PingRequest(
-                src=exchange.mailbox_id,
-                dest=exchange.mailbox_id,
+                src=client.mailbox_id,
+                dest=client.mailbox_id,
             )
-            exchange.send(exchange.mailbox_id, message)
-            assert exchange.recv() == message
-
-        exchange.terminate(aid)
-        exchange.terminate(aid)  # Idempotency check
+            client.send(client.mailbox_id, message)
+            assert client.recv() == message
 
 
-def test_bad_identifier_error() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+def test_send_bad_identifier_error() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
         uid: AgentId[Any] = AgentId.new()
         with pytest.raises(BadEntityIdError):
-            exchange.send(uid, PingRequest(src=exchange.mailbox_id, dest=uid))
+            client.send(uid, PingRequest(src=client.mailbox_id, dest=uid))
 
 
-def test_mailbox_closed_error() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.terminate(aid)
+def test_terminate_raises_mailbox_closed() -> None:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
+        aid = client.register_agent(EmptyBehavior)
+        client.terminate(aid)
         with pytest.raises(MailboxClosedError):
-            exchange.send(aid, PingRequest(src=exchange.mailbox_id, dest=aid))
-
-
-def test_get_handle_to_client() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-        handle = exchange.get_handle(aid)
-        handle.close()
-
-        with pytest.raises(TypeError, match='Handle must be created from an'):
-            exchange.get_handle(ClientId.new())  # type: ignore[arg-type]
+            client.send(aid, PingRequest(src=client.mailbox_id, dest=aid))
 
 
 def test_non_pickleable() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
         with pytest.raises(pickle.PicklingError):
-            pickle.dumps(exchange)
+            pickle.dumps(client)
 
 
 def test_discover() -> None:
@@ -78,52 +91,13 @@ def test_discover() -> None:
 
     class C(B): ...
 
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        bid = exchange.register_agent(B)
-        cid = exchange.register_agent(C)
-        did = exchange.register_agent(C)
-        exchange.terminate(did)
+    state = _ThreadExchangeState()
+    with ThreadExchangeClient.new(state=state) as client:
+        bid = client.register_agent(B)
+        cid = client.register_agent(C)
+        did = client.register_agent(C)
+        client.terminate(did)
 
-        assert len(exchange.discover(A)) == 0
-        assert exchange.discover(B, allow_subclasses=False) == (bid,)
-        assert exchange.discover(B, allow_subclasses=True) == (bid, cid)
-
-
-def test_exchange_clone() -> None:
-    unbound_exchange = ThreadExchangeFactory()
-    assert isinstance(unbound_exchange, ExchangeFactory)
-
-    user1 = unbound_exchange.bind_as_client()
-
-    clone = user1.clone()
-    assert isinstance(clone, ExchangeFactory)
-
-    user2 = clone.bind_as_client()
-    # Test user 1 exists in exchange 2
-    user2.send(
-        user1.mailbox_id,
-        PingRequest(src=user2.mailbox_id, dest=user1.mailbox_id),
-    )
-    # Test user 2 exists in exchange 1
-    user1.send(
-        user2.mailbox_id,
-        PingRequest(src=user1.mailbox_id, dest=user2.mailbox_id),
-    )
-
-    user1.close()
-    user2.close()
-
-
-def test_mailbox_terminated() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        aid = exchange.register_agent(EmptyBehavior)
-        exchange.terminate(aid)
-        with pytest.raises(BadEntityIdError):
-            exchange.clone().bind_as_agent(agent_id=aid)
-
-
-def test_mailbox_non_existent() -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
-        aid: AgentId[Any] = AgentId.new()
-        with pytest.raises(BadEntityIdError):
-            exchange.clone().bind_as_agent(agent_id=aid)
+        assert len(client.discover(A)) == 0
+        assert client.discover(B, allow_subclasses=False) == (bid,)
+        assert client.discover(B, allow_subclasses=True) == (bid, cid)

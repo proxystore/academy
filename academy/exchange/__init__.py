@@ -33,9 +33,9 @@ from academy.message import ResponseMessage
 
 __all__ = [
     'AgentExchangeClient',
+    'ExchangeClient',
     'ExchangeFactory',
     'UserExchangeClient',
-    '_ExchangeClient',
 ]
 
 logger = logging.getLogger(__name__)
@@ -132,35 +132,21 @@ class ExchangeClient(abc.ABC):
     instance is "bound" to a specific mailbox in the exchange.
 
     Warning:
-        Exchange clients should be instantiated via the
-        [`create()`][ExchangeClient.create] class method.
-
-    Warning:
         A specific exchange client should not be replicated because multiple
         client instances receiving from the same mailbox produces undefined
         behavior.
     """
 
-    @classmethod
-    @abc.abstractmethod
-    def create(
-        cls,
-        mailbox_id: EntityId | None,
-        *,
-        name: str | None,
-    ) -> Self:
-        """Instantiate a new client.
+    def __enter__(self) -> Self:
+        return self
 
-        Args:
-            mailbox_id: Bind the client to the specific mailbox. If `None`,
-                a new user will be registered and the client will be bound
-                to that mailbox.
-            name: Display name of the client if `mailbox_id` is `None`.
-
-        Returns:
-            An instantiated client bound to a specific mailbox.
-        """
-        ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        exc_traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     @property
     @abc.abstractmethod
@@ -186,6 +172,10 @@ class ExchangeClient(abc.ABC):
         allow_subclasses: bool = True,
     ) -> tuple[AgentId[Any], ...]:
         """Discover peer agents with a given behavior.
+
+        Warning:
+            Implementations of this method are often O(n) and scan the types
+            of all agents registered to the exchange.
 
         Args:
             behavior: Behavior type of interest.
@@ -418,7 +408,7 @@ class _EntityExchangeClient(abc.ABC):
             try:
                 message = self._exchange.recv()
                 logger.debug(
-                   'Received %s from %s for %s',
+                    'Received %s from %s for %s',
                     type(message).__name__,
                     message.src,
                     self._exchange.mailbox_id,
@@ -432,7 +422,11 @@ class _EntityExchangeClient(abc.ABC):
 
 
 class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
-    """agent exchange client.
+    """Agent exchange client.
+
+    Warning:
+        Agent exchange clients should only be created via
+        [`ExchangeFactory.create_agent_client()`][ExchangeFactory.create_agent_client]!
 
     Args:
         agent_id: Agent ID.
@@ -500,6 +494,10 @@ class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
 
 class UserExchangeClient(_EntityExchangeClient):
     """User exchange client.
+
+    Warning:
+        User exchange clients should only be created via
+        [`ExchangeFactory.create_user_client()`][ExchangeFactory.create_user_client]!
 
     Args:
         user_id: User ID.
