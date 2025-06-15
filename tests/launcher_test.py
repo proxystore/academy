@@ -60,7 +60,7 @@ def test_launch_agents_processes(
     executor = ProcessPoolExecutor(max_workers=2, mp_context=context)
     host, port = http_exchange_server
 
-    with HttpExchangeFactory(host, port).bind_as_client() as exchange:
+    with HttpExchangeFactory(host, port).create_user_client() as exchange:
         with Launcher(executor) as launcher:
             handle1 = launcher.launch(behavior, exchange)
             handle2 = launcher.launch(behavior, exchange)
@@ -88,7 +88,7 @@ def test_wait_timeout() -> None:
     behavior = SleepBehavior(TEST_LOOP_SLEEP)
     executor = ThreadPoolExecutor(max_workers=1)
 
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         with Launcher(executor) as launcher:
             handle = launcher.launch(behavior, exchange)
 
@@ -116,7 +116,7 @@ class FailOnStartupBehavior(Behavior):
 
 def test_restart_on_error(caplog) -> None:
     caplog.set_level(logging.DEBUG)
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         behavior = FailOnStartupBehavior(max_errors=2)
         # This test only works because we are using a ThreadPoolExecutor so
         # the state inside FailOnStartupBehavior is shared.

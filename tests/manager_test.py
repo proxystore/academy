@@ -43,13 +43,13 @@ def test_reply_to_requests_with_error() -> None:
         exchange=exchange,
         launcher=ThreadLauncher(),
     ) as manager:
-        with exchange.bind_as_client(start_listener=False) as client:
+        with exchange.create_user_client() as client:
             request = PingRequest(
-                src=client.mailbox_id,
+                src=client.user_id,
                 dest=manager.mailbox_id,
             )
             client.send(request.dest, request)
-            response = client.recv()
+            response = client._transport.recv()
             assert isinstance(response, PingResponse)
             assert isinstance(response.exception, TypeError)
 

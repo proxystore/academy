@@ -194,7 +194,7 @@ class Launcher:
         acb = _ACB(
             agent_id,
             behavior,
-            exchange.clone(),
+            exchange.factory(),
             done=threading.Event(),
         )
         self._acbs[agent_id] = acb

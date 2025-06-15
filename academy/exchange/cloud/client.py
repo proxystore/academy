@@ -22,8 +22,8 @@ import requests
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
+from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.exchange.cloud.config import ExchangeServingConfig
 from academy.exchange.cloud.server import _FORBIDDEN_CODE
@@ -82,20 +82,20 @@ class HttpExchangeFactory(ExchangeFactory):
             ssl_verify=ssl_verify,
         )
 
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> HttpExchangeClient:
-        return HttpExchangeClient.new(
+    ) -> HttpExchangeTransport:
+        return HttpExchangeTransport.new(
             connection_info=self._info,
             mailbox_id=mailbox_id,
             name=name,
         )
 
 
-class HttpExchangeClient(ExchangeClient, NoPickleMixin):
+class HttpExchangeTransport(ExchangeTransport, NoPickleMixin):
     """Http exchange client.
 
     Args:
@@ -132,17 +132,18 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
         mailbox_id: EntityId | None = None,
         name: str | None = None,
     ) -> Self:
-        """Instantiate a new client.
+        """Instantiate a new transport.
 
         Args:
             connection_info: Exchange connection information.
-            mailbox_id: Bind the client to the specific mailbox. If `None`,
-                a new user will be registered and the client will be bound
-                to that mailbox.
-            name: Display name of the client if `mailbox_id` is `None`.
+            mailbox_id: Bind the transport to the specific mailbox. If `None`,
+                a new user entity will be registered and the transport will be
+                bound to that mailbox.
+            name: Display name of the redistered entity if `mailbox_id` is
+                `None`.
 
         Returns:
-            An instantiated client bound to a specific mailbox.
+            An instantiated transport bound to a specific mailbox.
         """
         session = requests.Session()
         if connection_info.additional_headers is not None:
@@ -232,22 +233,20 @@ class HttpExchangeClient(ExchangeClient, NoPickleMixin):
         self,
         behavior: type[BehaviorT],
         *,
-        agent_id: AgentId[BehaviorT] | None = None,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
         """Create a new agent identifier and associated mailbox.
 
         Args:
             behavior: Type of the behavior this agent will implement.
-            agent_id: Specify the ID of the agent. Randomly generated
-                default.
             name: Optional human-readable name for the agent. Ignored if
                 `agent_id` is provided.
 
         Returns:
             Unique identifier for the agent's mailbox.
         """
-        aid = AgentId.new(name=name) if agent_id is None else agent_id
+        aid = AgentId.new(name=name) if _agent_id is None else _agent_id
         response = self._session.post(
             self._mailbox_url,
             json={

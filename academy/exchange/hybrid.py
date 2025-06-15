@@ -21,8 +21,8 @@ import redis
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
+from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.exchange.queue import Queue
 from academy.exchange.queue import QueueClosedError
@@ -96,13 +96,13 @@ class HybridExchangeFactory(ExchangeFactory):
         )
         self._ports = None if ports is None else iter(ports)
 
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> HybridExchangeClient:
-        return HybridExchangeClient.new(
+    ) -> HybridExchangeTransport:
+        return HybridExchangeTransport.new(
             interface=self._interface,
             mailbox_id=mailbox_id,
             name=name,
@@ -112,8 +112,8 @@ class HybridExchangeFactory(ExchangeFactory):
         )
 
 
-class HybridExchangeClient(ExchangeClient, NoPickleMixin):
-    """Hybrid exchange client bound to a specific mailbox."""
+class HybridExchangeTransport(ExchangeTransport, NoPickleMixin):
+    """Hybrid exchange transport bound to a specific mailbox."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -161,21 +161,22 @@ class HybridExchangeClient(ExchangeClient, NoPickleMixin):
         name: str | None = None,
         port: int | None = None,
     ) -> Self:
-        """Instantiate a new client.
+        """Instantiate a new transport.
 
         Args:
             namespace: Redis key namespace.
             redis_info: Redis connection information.
             interface: Network interface use for peer-to-peer communication.
                 If `None`, the hostname of the local host is used.
-            mailbox_id: Bind the client to the specific mailbox. If `None`,
-                a new user will be registered and the client will be bound
-                to that mailbox.
-            name: Display name of the client if `mailbox_id` is `None`.
+            mailbox_id: Bind the transport to the specific mailbox. If `None`,
+                a new user entity will be registered and the transport will be
+                bound to that mailbox.
+            name: Display name of the redistered entity if `mailbox_id` is
+                `None`.
             port: Port to listen for peer connection on.
 
         Returns:
-            An instantiated client bound to a specific mailbox.
+            An instantiated transport bound to a specific mailbox.
 
         Raises:
             redis.exceptions.ConnectionError: If the Redis server is not
@@ -264,8 +265,11 @@ class HybridExchangeClient(ExchangeClient, NoPickleMixin):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
-        aid: AgentId[Any] = AgentId.new(name=name)
+        aid: AgentId[Any] = (
+            AgentId.new(name=name) if _agent_id is None else _agent_id
+        )
         self._redis_client.set(
             self._status_key(aid),
             _MailboxState.ACTIVE.value,

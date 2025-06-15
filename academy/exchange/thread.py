@@ -14,8 +14,8 @@ else:  # pragma: <3.11 cover
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
+from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.exchange.queue import Queue
 from academy.exchange.queue import QueueClosedError
@@ -57,20 +57,20 @@ class ThreadExchangeFactory(ExchangeFactory, NoPickleMixin):
     ):
         self._state = _ThreadExchangeState() if _state is None else _state
 
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> ThreadExchangeClient:
-        return ThreadExchangeClient.new(
+    ) -> ThreadExchangeTransport:
+        return ThreadExchangeTransport.new(
             mailbox_id,
             name=name,
             state=self._state,
         )
 
 
-class ThreadExchangeClient(ExchangeClient, NoPickleMixin):
+class ThreadExchangeTransport(ExchangeTransport, NoPickleMixin):
     """Thread exchange client bound to a specific mailbox."""
 
     def __init__(
@@ -89,17 +89,18 @@ class ThreadExchangeClient(ExchangeClient, NoPickleMixin):
         name: str | None = None,
         state: _ThreadExchangeState,
     ) -> Self:
-        """Instantiate a new client.
+        """Instantiate a new transport.
 
         Args:
-            mailbox_id: Bind the client to the specific mailbox. If `None`,
-                a new user will be registered and the client will be bound
-                to that mailbox.
-            name: Display name of the client if `mailbox_id` is `None`.
+            mailbox_id: Bind the transport to the specific mailbox. If `None`,
+                a new user entity will be registered and the transport will be
+                bound to that mailbox.
+            name: Display name of the redistered entity if `mailbox_id` is
+                `None`.
             state: Shared state among exchange clients.
 
         Returns:
-            An instantiated client bound to a specific mailbox.
+            An instantiated transport bound to a specific mailbox.
         """
         if mailbox_id is None:
             mailbox_id = ClientId.new(name=name)
@@ -145,8 +146,11 @@ class ThreadExchangeClient(ExchangeClient, NoPickleMixin):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
-        aid: AgentId[BehaviorT] = AgentId.new(name=name)
+        aid: AgentId[BehaviorT] = (
+            AgentId.new(name=name) if _agent_id is None else _agent_id
+        )
         assert aid not in self._state.queues
         self._state.queues[aid] = Queue()
         self._state.behaviors[aid] = behavior

@@ -69,15 +69,15 @@ def test_server_run() -> None:
 
     while True:
         try:
-            exchange = HttpExchangeFactory(
+            client = HttpExchangeFactory(
                 config.host,
                 config.port,
                 scheme='http',
-            ).bind_as_client()
+            ).create_user_client()
         except OSError:  # pragma: no cover
             time.sleep(0.01)
         else:
-            exchange.close()
+            client.close()
             break
 
     process.terminate()
@@ -95,16 +95,16 @@ def test_server_run_ssl(ssl_context: SSLContextFixture) -> None:
 
     while True:
         try:
-            exchange = HttpExchangeFactory(
+            client = HttpExchangeFactory(
                 config.host,
                 config.port,
                 scheme='https',
                 ssl_verify=False,
-            ).bind_as_client()
+            ).create_user_client()
         except OSError:  # pragma: no cover
             time.sleep(0.01)
         else:
-            exchange.close()
+            client.close()
             break
 
     process.terminate()

@@ -13,7 +13,7 @@ from proxystore.store.executor import ProxyAlways
 from proxystore.store.executor import ProxyNever
 
 from academy.exchange import MailboxStatus
-from academy.exchange.cloud.client import HttpExchangeFactory
+from academy.exchange.cloud.transport import HttpExchangeFactory
 from academy.exchange.proxystore import ProxyStoreExchangeFactory
 from academy.exchange.thread import ThreadExchangeFactory
 from academy.message import ActionRequest
@@ -42,7 +42,7 @@ def store() -> Generator[Store[LocalConnector], None, None]:
         (lambda x: isinstance(x, str), True),
     ),
 )
-def test_wrap_basic_client_functionality(
+def test_wrap_basic_transport_functionality(
     should_proxy: Callable[[Any], bool],
     resolve_async: bool,
     store: Store[LocalConnector],
@@ -55,17 +55,17 @@ def test_wrap_basic_client_functionality(
         resolve_async=resolve_async,
     )
 
-    with wrapped_factory._create_client() as wrapped_client1:
-        src = wrapped_client1.mailbox_id
-        dest = wrapped_client1.register_agent(EmptyBehavior)
-        assert wrapped_client1.status(dest) == MailboxStatus.ACTIVE
+    with wrapped_factory._create_transport() as wrapped_transport1:
+        src = wrapped_transport1.mailbox_id
+        dest = wrapped_transport1.register_agent(EmptyBehavior)
+        assert wrapped_transport1.status(dest) == MailboxStatus.ACTIVE
 
-        wrapped_client2 = wrapped_factory._create_client(mailbox_id=dest)
-        assert wrapped_client2.mailbox_id == dest
+        wrapped_transport2 = wrapped_factory._create_transport(mailbox_id=dest)
+        assert wrapped_transport2.mailbox_id == dest
 
         ping = PingRequest(src=src, dest=dest)
-        wrapped_client1.send(dest, ping)
-        assert wrapped_client2.recv() == ping
+        wrapped_transport1.send(dest, ping)
+        assert wrapped_transport2.recv() == ping
 
         request = ActionRequest(
             src=src,
@@ -74,9 +74,9 @@ def test_wrap_basic_client_functionality(
             pargs=('value', 123),
             kargs={'foo': 'value', 'bar': 123},
         )
-        wrapped_client1.send(dest, request)
+        wrapped_transport1.send(dest, request)
 
-        received = wrapped_client2.recv()
+        received = wrapped_transport2.recv()
         assert isinstance(received, ActionRequest)
         assert request.tag == received.tag
 
@@ -91,9 +91,9 @@ def test_wrap_basic_client_functionality(
             assert old == new
 
         response = request.response('result')
-        wrapped_client1.send(dest, response)
+        wrapped_transport1.send(dest, response)
 
-        received = wrapped_client2.recv()
+        received = wrapped_transport2.recv()
         assert isinstance(received, ActionResponse)
         assert response.tag == received.tag
         assert (type(received.result) is Proxy) == should_proxy(
@@ -101,9 +101,9 @@ def test_wrap_basic_client_functionality(
         )
         assert response.result == received.result
 
-        assert wrapped_client1.discover(EmptyBehavior) == (dest,)
+        assert wrapped_transport1.discover(EmptyBehavior) == (dest,)
 
-        wrapped_client2.close()
+        wrapped_transport2.close()
 
 
 def test_serialize_factory(

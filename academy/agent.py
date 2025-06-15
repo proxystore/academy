@@ -113,9 +113,9 @@ class Agent(Generic[BehaviorT]):
     ) -> None:
         self.agent_id = agent_id
         self.behavior = behavior
-        self.exchange = exchange.bind_as_agent(
+        self.exchange = exchange.create_agent_client(
             agent_id,
-            handler=self._request_handler,
+            request_handler=self._request_handler,
         )
         self.config = config if config is not None else AgentRunConfig()
 
@@ -306,7 +306,9 @@ class Agent(Generic[BehaviorT]):
                 self._loop_futures[loop_future] = name
                 loop_future.add_done_callback(self._loop_callback)
 
-            listener_future = self._loop_pool.submit(self.exchange.listen)
+            listener_future = self._loop_pool.submit(
+                self.exchange._listen_for_messages,
+            )
             self._loop_futures[listener_future] = '_exchange.listen'
 
             self._state = _AgentState.RUNNING
@@ -375,7 +377,7 @@ class Agent(Generic[BehaviorT]):
                 # closed.
                 self.exchange.register_agent(
                     type(self.behavior),
-                    agent_id=self.agent_id,
+                    _agent_id=self.agent_id,
                 )
 
             self.behavior.on_shutdown()

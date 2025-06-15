@@ -78,9 +78,8 @@ class Manager(NoPickleMixin):
                 'use as the default.',
             )
 
-        self._exchange = exchange.bind_as_client()
-        assert isinstance(self._exchange.mailbox_id, ClientId)
-        self._mailbox_id: ClientId = self._exchange.mailbox_id
+        self._exchange = exchange.create_user_client()
+        self._mailbox_id = self._exchange.user_id
         self._launchers = launcher
         self._default_launcher = default_launcher
 
@@ -141,8 +140,6 @@ class Manager(NoPickleMixin):
                 with contextlib.suppress(MailboxClosedError):
                     handle.shutdown()
         logger.debug('Instructed managed agents to shutdown')
-        self.exchange.close_bound_handles()
-        self.exchange.terminate(self.mailbox_id)
         self.exchange.close()
         for launcher in self._launchers.values():
             launcher.close()

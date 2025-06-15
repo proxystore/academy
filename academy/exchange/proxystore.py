@@ -15,8 +15,8 @@ from proxystore.store import Store
 from proxystore.store.utils import resolve_async
 
 from academy.behavior import Behavior
-from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
+from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.identifier import AgentId
 from academy.identifier import EntityId
@@ -92,18 +92,18 @@ class ProxyStoreExchangeFactory(ExchangeFactory):
         self.should_proxy = should_proxy
         self.resolve_async = resolve_async
 
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> ProxyStoreExchangeClient:
+    ) -> ProxyStoreExchangeTransport:
         # If store was none because of pickling,
         # the __setstate__ must be called before bind.
         assert self.store is not None
-        client = (self.base._create_client(mailbox_id, name=name),)
-        return ProxyStoreExchangeClient(
-            client,
+        transport = self.base._create_transport(mailbox_id, name=name)
+        return ProxyStoreExchangeTransport(
+            transport,
             self.store,
             self.should_proxy,
             resolve_async=self.resolve_async,
@@ -113,7 +113,7 @@ class ProxyStoreExchangeFactory(ExchangeFactory):
         assert self.store is not None
 
         return {
-            'exchange': self.exchange,
+            'base': self.base,
             'store_config': self.store.config(),
             'resolve_async': self.resolve_async,
             'should_proxy': self.should_proxy,
@@ -127,18 +127,18 @@ class ProxyStoreExchangeFactory(ExchangeFactory):
         self.__dict__.update(state)
 
 
-class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
+class ProxyStoreExchangeTransport(ExchangeTransport, NoPickleMixin):
     """ProxyStore exchange client bound to a specific mailbox."""
 
     def __init__(
         self,
-        client: ExchangeClient,
+        transport: ExchangeTransport,
         store: Store[Any],
         should_proxy: Callable[[Any], bool],
         *,
         resolve_async: bool = False,
     ) -> None:
-        self.client = client
+        self.transport = transport
         self.store = store
         self.should_proxy = should_proxy
         self.resolve_async = resolve_async
@@ -146,10 +146,10 @@ class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
 
     @property
     def mailbox_id(self) -> EntityId:
-        return self.client.mailbox_id
+        return self.transport.mailbox_id
 
     def close(self) -> None:
-        self.client.close()
+        self.transport.close()
 
     def discover(
         self,
@@ -157,21 +157,21 @@ class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
         *,
         allow_subclasses: bool = True,
     ) -> tuple[AgentId[Any], ...]:
-        return self.client.discover(
+        return self.transport.discover(
             behavior,
             allow_subclasses=allow_subclasses,
         )
 
     def factory(self) -> ProxyStoreExchangeFactory:
         return ProxyStoreExchangeFactory(
-            self.client.factory(),
+            self.transport.factory(),
             self.store,
             should_proxy=self.should_proxy,
             resolve_async=self.resolve_async,
         )
 
     def recv(self, timeout: float | None = None) -> Message:
-        message = self.client.recv(timeout)
+        message = self.transport.recv(timeout)
         if self.resolve_async and isinstance(message, ActionRequest):
             for arg in (*message.pargs, *message.kargs.values()):
                 if type(arg) is Proxy:
@@ -189,8 +189,13 @@ class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
-        return self.client.register_agent(behavior, name=name)
+        return self.transport.register_agent(
+            behavior,
+            name=name,
+            _agent_id=_agent_id,
+        )
 
     def send(self, uid: EntityId, message: Message) -> None:
         if isinstance(message, ActionRequest):
@@ -211,10 +216,10 @@ class ProxyStoreExchangeClient(ExchangeClient, NoPickleMixin):
                 self.should_proxy,
             )
 
-        self.client.send(uid, message)
+        self.transport.send(uid, message)
 
     def status(self, uid: EntityId) -> MailboxStatus:
-        return self.client.status(uid)
+        return self.transport.status(uid)
 
     def terminate(self, uid: EntityId) -> None:
-        self.client.terminate(uid)
+        self.transport.terminate(uid)

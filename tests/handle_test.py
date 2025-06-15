@@ -8,7 +8,7 @@ import pytest
 from academy.exception import HandleClosedError
 from academy.exception import HandleNotBoundError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
+from academy.exchange import UserExchangeClient
 from academy.exchange.thread import ThreadExchangeFactory
 from academy.handle import BoundRemoteHandle
 from academy.handle import Handle
@@ -84,7 +84,7 @@ def test_proxy_handle_agent_shutdown_errors() -> None:
 
 
 def test_unbound_remote_handle_serialize(
-    exchange: ExchangeClient,
+    exchange: UserExchangeClient,
 ) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
     handle = UnboundRemoteHandle(agent_id)
@@ -97,17 +97,17 @@ def test_unbound_remote_handle_serialize(
     assert repr(reconstructed) == repr(handle)
 
 
-def test_unbound_remote_handle_bind(exchange: ExchangeClient) -> None:
+def test_unbound_remote_handle_bind(exchange: UserExchangeClient) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
     handle = UnboundRemoteHandle(agent_id)
     with handle.bind_to_exchange(exchange) as agent_bound:
         assert isinstance(agent_bound, BoundRemoteHandle)
 
 
-def test_unbound_remote_handle_errors(exchange: ExchangeClient) -> None:
+def test_unbound_remote_handle_errors(exchange: UserExchangeClient) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
     handle = UnboundRemoteHandle(agent_id)
-    request = PingRequest(src=exchange.mailbox_id, dest=agent_id)
+    request = PingRequest(src=exchange.user_id, dest=agent_id)
     with pytest.raises(HandleNotBoundError):
         handle._send_request(request)
     with pytest.raises(HandleNotBoundError):
@@ -120,12 +120,12 @@ def test_unbound_remote_handle_errors(exchange: ExchangeClient) -> None:
         handle.shutdown()
 
 
-def test_remote_handle_closed_error(exchange: ExchangeClient) -> None:
+def test_remote_handle_closed_error(exchange: UserExchangeClient) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
     handle = BoundRemoteHandle(
         exchange,
         agent_id,
-        exchange.mailbox_id,
+        exchange.user_id,
     )
     handle.close()
 
@@ -138,9 +138,9 @@ def test_remote_handle_closed_error(exchange: ExchangeClient) -> None:
         handle.shutdown()
 
 
-def test_agent_remote_handle_serialize(exchange: ExchangeClient) -> None:
+def test_agent_remote_handle_serialize(exchange: UserExchangeClient) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
-    with BoundRemoteHandle(exchange, agent_id, exchange.mailbox_id) as handle:
+    with BoundRemoteHandle(exchange, agent_id, exchange.user_id) as handle:
         # Note: don't call pickle.dumps here because ThreadExchange
         # is not pickleable so we test __reduce__ directly.
         class_, args = handle.__reduce__()
@@ -151,21 +151,24 @@ def test_agent_remote_handle_serialize(exchange: ExchangeClient) -> None:
         assert reconstructed.agent_id == handle.agent_id
 
 
-def test_agent_remote_handle_bind(exchange: ExchangeClient) -> None:
+def test_agent_remote_handle_bind(exchange: UserExchangeClient) -> None:
     agent_id = exchange.register_agent(EmptyBehavior)
-    with exchange.clone().bind_as_agent(agent_id=agent_id) as mailbox:
+    with exchange.factory().create_agent_client(
+        agent_id=agent_id,
+        request_handler=lambda _: None,
+    ) as client:
         with pytest.raises(
             ValueError,
             match=f'Cannot create handle to {agent_id}',
         ):
-            mailbox.get_handle(agent_id)
+            client.get_handle(agent_id)
 
 
 def test_client_remote_handle_log_bad_response(
     launcher: ThreadLauncher,
 ) -> None:
     behavior = EmptyBehavior()
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         with launcher.launch(behavior, exchange) as handle:
             assert handle.mailbox_id is not None
             # Should log but not crash
@@ -182,7 +185,7 @@ def test_client_remote_handle_actions(
     launcher: ThreadLauncher,
 ) -> None:
     behavior = CounterBehavior()
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         with launcher.launch(behavior, exchange) as handle:
             assert handle.ping() > 0
 
@@ -201,7 +204,7 @@ def test_client_remote_handle_errors(
     launcher: ThreadLauncher,
 ) -> None:
     behavior = ErrorBehavior()
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         with launcher.launch(behavior, exchange) as handle:
             with pytest.raises(
                 RuntimeError,
@@ -217,7 +220,7 @@ def test_client_remote_handle_errors(
 def test_client_remote_handle_wait_futures(
     launcher: ThreadLauncher,
 ) -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         behavior = SleepBehavior()
         handle = launcher.launch(behavior, exchange)
 
@@ -233,7 +236,7 @@ def test_client_remote_handle_wait_futures(
 def test_client_remote_handle_cancel_futures(
     launcher: ThreadLauncher,
 ) -> None:
-    with ThreadExchangeFactory().bind_as_client() as exchange:
+    with ThreadExchangeFactory().create_user_client() as exchange:
         behavior = SleepBehavior()
         handle = launcher.launch(behavior, exchange)
 

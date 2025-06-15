@@ -59,7 +59,8 @@ class ExchangeFactory(abc.ABC):
 
     An exchange factory is used to mint new exchange clients for users and
     agents, encapsulating the complexities of instantiating the underlying
-    communication classes.
+    communication classes (the
+    [`ExchangeTransport`][academy.exchange.ExchangeTransport]).
 
     Warning:
         Factory implementations must be efficiently pickleable because
@@ -68,12 +69,12 @@ class ExchangeFactory(abc.ABC):
     """
 
     @abc.abstractmethod
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> ExchangeClient: ...
+    ) -> ExchangeTransport: ...
 
     def create_agent_client(
         self,
@@ -99,40 +100,50 @@ class ExchangeFactory(abc.ABC):
             BadEntityIdError: If an agent with `agent_id` is not already
                 registered with the exchange.
         """
-        client = self._create_client(mailbox_id=agent_id)
-        assert client.mailbox_id == agent_id
-        if client.status(agent_id) != MailboxStatus.ACTIVE:
-            client.close()
+        transport = self._create_transport(mailbox_id=agent_id)
+        assert transport.mailbox_id == agent_id
+        if transport.status(agent_id) != MailboxStatus.ACTIVE:
+            transport.close()
             raise BadEntityIdError(agent_id)
-        return AgentExchangeClient(agent_id, client, request_handler)
+        return AgentExchangeClient(
+            agent_id,
+            transport,
+            request_handler=request_handler,
+        )
 
     def create_user_client(
         self,
         *,
         name: str | None = None,
+        start_listener: bool = False,
     ) -> UserExchangeClient:
         """Create a new user in the exchange and associated client.
 
         Args:
             name: Display name of the client on the exchange.
+            start_listener: Start a message listener thread.
         """
-        client = self._create_client(mailbox_id=None, name=name)
-        user_id = client.mailbox_id
+        transport = self._create_transport(mailbox_id=None, name=name)
+        user_id = transport.mailbox_id
         assert isinstance(user_id, ClientId)
-        return UserExchangeClient(user_id, client)
+        return UserExchangeClient(
+            user_id,
+            transport,
+            start_listener=start_listener,
+        )
 
 
-class ExchangeClient(abc.ABC):
-    """Low-level exchange client.
+class ExchangeTransport(abc.ABC):
+    """Low-level exchange communicator.
 
     A message exchange hosts mailboxes for each entity (i.e., agent or
-    user) in a multi-agent system. This client protocol defines mechanisms
+    user) in a multi-agent system. This transport protocol defines mechanisms
     for entity management (e.g., registration, discovery, status, termination)
-    and for sending/receving messages from a mailbox. As such, each client
+    and for sending/receiving messages from a mailbox. As such, each transport
     instance is "bound" to a specific mailbox in the exchange.
 
     Warning:
-        A specific exchange client should not be replicated because multiple
+        A specific exchange transport should not be replicated because multiple
         client instances receiving from the same mailbox produces undefined
         behavior.
     """
@@ -216,6 +227,10 @@ class ExchangeClient(abc.ABC):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        # This is needed by a strange hack in academy/agent.py where we
+        # close an agent mailbox and immediately re-register it. This will no
+        # longer be needed after Issue #100 and can be removed.
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
         """Register a new agent and associated mailbox with the exchange.
 
@@ -267,9 +282,22 @@ class ExchangeClient(abc.ABC):
         ...
 
 
-class _EntityExchangeClient(abc.ABC):
-    def __init__(self, exchange: ExchangeClient) -> None:
-        self._exchange = exchange
+class ExchangeClient(abc.ABC):
+    """Base exchange client.
+
+    Warning:
+        Exchange clients should only be created via
+        [`ExchangeFactory.create_agent_client()`][ExchangeFactory.create_agent_client]
+        or
+        [`ExchangeFactory.create_user_client()`][ExchangeFactory.create_user_client]!
+
+
+    Args:
+        transport: Exchange transport bound to a mailbox.
+    """
+
+    def __init__(self, transport: ExchangeTransport) -> None:
+        self._transport = transport
         self._handles: dict[uuid.UUID, BoundRemoteHandle[Any]] = {}
 
     def __enter__(self) -> Self:
@@ -284,7 +312,9 @@ class _EntityExchangeClient(abc.ABC):
         self.close()
 
     @abc.abstractmethod
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Close the transport."""
+        ...
 
     def _close_handles(self) -> None:
         """Close all handles created by this client."""
@@ -308,14 +338,14 @@ class _EntityExchangeClient(abc.ABC):
         Returns:
             Tuple of agent IDs implementing the behavior.
         """
-        return self._exchange.discover(
+        return self._transport.discover(
             behavior,
             allow_subclasses=allow_subclasses,
         )
 
     def factory(self) -> ExchangeFactory:
         """Get an exchange factory."""
-        return self._exchange.factory()
+        return self._transport.factory()
 
     def get_handle(
         self,
@@ -342,7 +372,7 @@ class _EntityExchangeClient(abc.ABC):
                 f'Handle must be created from an {AgentId.__name__} '
                 f'but got identifier with type {type(aid).__name__}.',
             )
-        handle = BoundRemoteHandle(self, aid, self._exchange.mailbox_id)
+        handle = BoundRemoteHandle(self, aid, self._transport.mailbox_id)
         self._handles[handle.handle_id] = handle
         logger.info('Created handle to %s', aid)
         return handle
@@ -352,6 +382,7 @@ class _EntityExchangeClient(abc.ABC):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
         """Register a new agent and associated mailbox with the exchange.
 
@@ -362,7 +393,11 @@ class _EntityExchangeClient(abc.ABC):
         Returns:
             Agent ID.
         """
-        agent_id = self._exchange.register_agent(behavior, name=name)
+        agent_id = self._transport.register_agent(
+            behavior,
+            name=name,
+            _agent_id=_agent_id,
+        )
         logger.info('Registered %s in exchange', agent_id)
         return agent_id
 
@@ -377,7 +412,7 @@ class _EntityExchangeClient(abc.ABC):
             BadEntityIdError: If a mailbox for `uid` does not exist.
             MailboxClosedError: If the mailbox was closed.
         """
-        self._exchange.send(uid, message)
+        self._transport.send(uid, message)
         logger.debug('Sent %s to %s', type(message).__name__, uid)
 
     def status(self, uid: EntityId) -> MailboxStatus:
@@ -386,7 +421,7 @@ class _EntityExchangeClient(abc.ABC):
         Args:
             uid: Entity identifier of the mailbox to check.
         """
-        return self._exchange.status(uid)
+        return self._transport.status(uid)
 
     def terminate(self, uid: EntityId) -> None:
         """Terminate a mailbox in the exchange.
@@ -400,18 +435,18 @@ class _EntityExchangeClient(abc.ABC):
         Args:
             uid: Entity identifier of the mailbox to close.
         """
-        self._exchange.terminate(uid)
+        self._transport.terminate(uid)
         logger.debug('Terminated mailbox for %s', uid)
 
     def _listen_for_messages(self) -> None:
         while True:
             try:
-                message = self._exchange.recv()
+                message = self._transport.recv()
                 logger.debug(
                     'Received %s from %s for %s',
                     type(message).__name__,
                     message.src,
-                    self._exchange.mailbox_id,
+                    self._transport.mailbox_id,
                 )
             except MailboxClosedError:
                 break
@@ -421,7 +456,7 @@ class _EntityExchangeClient(abc.ABC):
     def _handle_message(self, message: Message) -> None: ...
 
 
-class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
+class AgentExchangeClient(ExchangeClient, Generic[BehaviorT]):
     """Agent exchange client.
 
     Warning:
@@ -430,25 +465,21 @@ class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
 
     Args:
         agent_id: Agent ID.
-        exchange: Exchange client bound to `agent_id`.
+        transport: Exchange transport bound to `agent_id`.
         request_handler: Request handler of the agent that will be called
             for each message received to this agent's mailbox.
+            start_listener: Start a message listener thread.
     """
 
     def __init__(
         self,
         agent_id: AgentId[BehaviorT],
-        exchange: ExchangeClient,
+        transport: ExchangeTransport,
         request_handler: Callable[[RequestMessage], None],
     ) -> None:
-        super().__init__(exchange)
+        super().__init__(transport)
         self._agent_id = agent_id
         self._request_handler = request_handler
-        self._listener_thread = threading.Thread(
-            target=self._listen_for_messages,
-            name=f'agent-exchange-listener-{self.agent_id.uid}',
-        )
-        self._listener_thread.start()
 
     def __repr__(self) -> str:
         return f'{type(self).__name__}({self.agent_id!r})'
@@ -464,13 +495,12 @@ class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
     def close(self) -> None:
         """Close the user client.
 
-        This closes the underlying exchange and all handles created by this
-        client. The agent's mailbox will not be terminated so the agent
+        This closes the underlying exchange transport and all handles created
+        by this client. The agent's mailbox will not be terminated so the agent
         can be started again later.
         """
-        self._listener_thread.join()
-        self._exchange.close()
         self._close_handles()
+        self._transport.close()
         logger.info('Closed exchange client for %s', self.agent_id)
 
     def _handle_message(self, message: Message) -> None:
@@ -492,7 +522,7 @@ class AgentExchangeClient(Generic[BehaviorT], _EntityExchangeClient):
             raise AssertionError('Unreachable.')
 
 
-class UserExchangeClient(_EntityExchangeClient):
+class UserExchangeClient(ExchangeClient):
     """User exchange client.
 
     Warning:
@@ -501,21 +531,26 @@ class UserExchangeClient(_EntityExchangeClient):
 
     Args:
         user_id: User ID.
-        exchange: Exchange client bound to `user_id`.
+        transport: Exchange transport bound to `user_id`.
+        start_listener: Start a message listener thread.
     """
 
     def __init__(
         self,
         user_id: ClientId,
-        exchange: ExchangeClient,
+        transport: ExchangeTransport,
+        *,
+        start_listener: bool = False,
     ) -> None:
-        super().__init__(exchange)
+        super().__init__(transport)
         self._user_id = user_id
-        self._listener_thread = threading.Thread(
-            target=self._listen_for_messages,
-            name=f'user-exchange-listener-{self.user_id.uid}',
-        )
-        self._listener_thread.start()
+        self._listener_thread: threading.Thread | None = None
+        if start_listener:
+            self._listener_thread = threading.Thread(
+                target=self._listen_for_messages,
+                name=f'user-exchange-listener-{self.user_id.uid}',
+            )
+            self._listener_thread.start()
 
     def __repr__(self) -> str:
         return f'{type(self).__name__}({self.user_id!r})'
@@ -532,20 +567,21 @@ class UserExchangeClient(_EntityExchangeClient):
         """Close the user client.
 
         This terminates the user's mailbox, closes the underlying exchange
-        client, and closes all handles produced by this client.
+        transport, and closes all handles produced by this client.
         """
-        self._exchange.terminate(self.user_id)
-        logger.info(f'Terminated mailbox for {self.user_id}')
-        self._listener_thread.join()
-        self._exchange.close()
         self._close_handles()
+        self._transport.terminate(self.user_id)
+        logger.info(f'Terminated mailbox for {self.user_id}')
+        if self._listener_thread is not None:
+            self._listener_thread.join()
+        self._transport.close()
         logger.info('Closed exchange client for %s', self.user_id)
 
     def _handle_message(self, message: Message) -> None:
         if isinstance(message, get_args(RequestMessage)):
             error = TypeError(f'{self.user_id} cannot fulfill requests.')
             response = message.error(error)
-            self._exchange.send(response.dest, response)
+            self._transport.send(response.dest, response)
             logger.warning(
                 '%s exchange client received unexpected request message '
                 'from %s',

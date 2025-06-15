@@ -20,8 +20,8 @@ import redis
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
-from academy.exchange import ExchangeClient
 from academy.exchange import ExchangeFactory
+from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.identifier import AgentId
 from academy.identifier import ClientId
@@ -66,21 +66,21 @@ class RedisExchangeFactory(ExchangeFactory):
     ) -> None:
         self.redis_info = _RedisConnectionInfo(hostname, port, redis_kwargs)
 
-    def _create_client(
+    def _create_transport(
         self,
         mailbox_id: EntityId | None = None,
         *,
         name: str | None = None,
-    ) -> RedisExchangeClient:
-        return RedisExchangeClient.new(
+    ) -> RedisExchangeTransport:
+        return RedisExchangeTransport.new(
             mailbox_id=mailbox_id,
             name=name,
             redis_info=self.redis_info,
         )
 
 
-class RedisExchangeClient(ExchangeClient, NoPickleMixin):
-    """Redis exchange client bound to a specific mailbox."""
+class RedisExchangeTransport(ExchangeTransport, NoPickleMixin):
+    """Redis exchange transport bound to a specific mailbox."""
 
     def __init__(
         self,
@@ -110,17 +110,18 @@ class RedisExchangeClient(ExchangeClient, NoPickleMixin):
         name: str | None = None,
         redis_info: _RedisConnectionInfo,
     ) -> Self:
-        """Instantiate a new client.
+        """Instantiate a new transport.
 
         Args:
-            mailbox_id: Bind the client to the specific mailbox. If `None`,
-                a new user will be registered and the client will be bound
-                to that mailbox.
-            name: Display name of the client if `mailbox_id` is `None`.
+            mailbox_id: Bind the transport to the specific mailbox. If `None`,
+                a new user entity will be registered and the transport will be
+                bound to that mailbox.
+            name: Display name of the redistered entity if `mailbox_id` is
+                `None`.
             redis_info: Redis connection information.
 
         Returns:
-            An instantiated client bound to a specific mailbox.
+            An instantiated transport bound to a specific mailbox.
 
         Raises:
             redis.exceptions.ConnectionError: If the Redis server is not
@@ -218,8 +219,11 @@ class RedisExchangeClient(ExchangeClient, NoPickleMixin):
         behavior: type[BehaviorT],
         *,
         name: str | None = None,
+        _agent_id: AgentId[BehaviorT] | None = None,
     ) -> AgentId[BehaviorT]:
-        aid: AgentId[BehaviorT] = AgentId.new(name=name)
+        aid: AgentId[BehaviorT] = (
+            AgentId.new(name=name) if _agent_id is None else _agent_id
+        )
         self._client.set(self._active_key(aid), _MailboxState.ACTIVE.value)
         self._client.set(
             self._behavior_key(aid),
