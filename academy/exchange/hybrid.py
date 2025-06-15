@@ -240,7 +240,6 @@ class HybridExchangeClient(ExchangeClient):
         self._close_mailbox_server()
         self._redis_client.close()
         self._socket_pool.close()
-        logger.debug('Closed exchange (%s)', self)
 
     def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of mailbox on exchange."""
@@ -280,7 +279,6 @@ class HybridExchangeClient(ExchangeClient):
             self._behavior_key(aid),
             ','.join(behavior.behavior_mro()),
         )
-        logger.debug('Registered %s in %s', aid, self)
         return aid
 
     def _register_client(
@@ -323,7 +321,6 @@ class HybridExchangeClient(ExchangeClient):
         self._redis_client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
         if isinstance(uid, AgentId):
             self._redis_client.delete(self._behavior_key(uid))
-        logger.debug('Closed mailbox for %s (%s)', uid, self)
 
     def discover(
         self,
@@ -575,9 +572,6 @@ class HybridExchangeClient(ExchangeClient):
             TimeoutError: if a `timeout` was specified and exceeded.
         """
         try:
-            logger.debug(
-                f'Getting message from queue for mailbox: {self.mailbox_id}',
-            )
             return self._messages.get(timeout=timeout)
         except QueueClosedError:
             raise MailboxClosedError(self.mailbox_id) from None

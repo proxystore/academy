@@ -417,6 +417,12 @@ class _EntityExchangeClient(abc.ABC):
         while True:
             try:
                 message = self._exchange.recv()
+                logger.debug(
+                   'Received %s from %s for %s',
+                    type(message).__name__,
+                    message.src,
+                    self._exchange.mailbox_id,
+                )
             except MailboxClosedError:
                 break
             self._handle_message(message)

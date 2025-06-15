@@ -155,7 +155,6 @@ class HttpExchangeClient(ExchangeClient):
         super().close()
 
         self._session.close()
-        logger.debug('Closed exchange (%s)', self)
 
     def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of mailbox on exchange."""
@@ -203,7 +202,6 @@ class HttpExchangeClient(ExchangeClient):
             },
         )
         response.raise_for_status()
-        logger.debug('Registered %s in %s', aid, self)
         return aid
 
     def _register_client(
@@ -242,7 +240,6 @@ class HttpExchangeClient(ExchangeClient):
             json={'mailbox': uid.model_dump_json()},
         )
         response.raise_for_status()
-        logger.debug('Closed mailbox for %s (%s)', uid, self)
 
     def discover(
         self,
@@ -299,7 +296,6 @@ class HttpExchangeClient(ExchangeClient):
         elif response.status_code == _FORBIDDEN_CODE:
             raise MailboxClosedError(uid)
         response.raise_for_status()
-        logger.debug('Sent %s to %s', type(message).__name__, uid)
 
     def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
@@ -331,11 +327,6 @@ class HttpExchangeClient(ExchangeClient):
         response.raise_for_status()
 
         message = BaseMessage.model_from_json(response.json().get('message'))
-        logger.debug(
-            'Received %s to %s',
-            type(response).__name__,
-            self.mailbox_id,
-        )
         return message
 
     def clone(self) -> HttpExchangeFactory:

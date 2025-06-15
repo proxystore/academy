@@ -161,7 +161,6 @@ class RedisExchangeClient(ExchangeClient):
         super().close()
 
         self._client.close()
-        logger.debug('Closed exchange (%s)', self)
 
     def status(self, mailbox_id: EntityId) -> MailboxStatus:
         """Check status of mailbox on exchange."""
@@ -198,7 +197,6 @@ class RedisExchangeClient(ExchangeClient):
             self._behavior_key(aid),
             ','.join(behavior.behavior_mro()),
         )
-        logger.debug('Registered %s in %s', aid, self)
         return aid
 
     def _register_client(
@@ -235,7 +233,6 @@ class RedisExchangeClient(ExchangeClient):
         self._client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
         if isinstance(uid, AgentId):
             self._client.delete(self._behavior_key(uid))
-        logger.debug('Closed mailbox for %s (%s)', uid, self)
 
     def discover(
         self,
@@ -289,7 +286,6 @@ class RedisExchangeClient(ExchangeClient):
             raise MailboxClosedError(uid)
         else:
             self._client.rpush(self._queue_key(uid), message.model_serialize())
-            logger.debug('Sent %s to %s', type(message).__name__, uid)
 
     def recv(self, timeout: float | None = None) -> Message:
         """Receive the next message in the mailbox.
@@ -340,11 +336,6 @@ class RedisExchangeClient(ExchangeClient):
                 raise MailboxClosedError(self.mailbox_id)
             message = BaseMessage.model_deserialize(raw[1])
             assert isinstance(message, get_args(Message))
-            logger.debug(
-                'Received %s to %s',
-                type(message).__name__,
-                self.mailbox_id,
-            )
             return message
 
     def clone(self) -> RedisExchangeFactory:
