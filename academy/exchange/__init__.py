@@ -293,9 +293,9 @@ class ExchangeClient(abc.ABC):
 
     Warning:
         Exchange clients should only be created via
-        [`ExchangeFactory.create_agent_client()`][ExchangeFactory.create_agent_client]
+        [`ExchangeFactory.create_agent_client()`][academy.exchange.ExchangeFactory.create_agent_client]
         or
-        [`ExchangeFactory.create_user_client()`][ExchangeFactory.create_user_client]!
+        [`ExchangeFactory.create_user_client()`][academy.exchange.ExchangeFactory.create_user_client]!
 
 
     Args:
@@ -467,7 +467,7 @@ class AgentExchangeClient(ExchangeClient, Generic[BehaviorT]):
 
     Warning:
         Agent exchange clients should only be created via
-        [`ExchangeFactory.create_agent_client()`][ExchangeFactory.create_agent_client]!
+        [`ExchangeFactory.create_agent_client()`][academy.exchange.ExchangeFactory.create_agent_client]!
 
     Args:
         agent_id: Agent ID.
@@ -533,7 +533,7 @@ class UserExchangeClient(ExchangeClient):
 
     Warning:
         User exchange clients should only be created via
-        [`ExchangeFactory.create_user_client()`][ExchangeFactory.create_user_client]!
+        [`ExchangeFactory.create_user_client()`][academy.exchange.ExchangeFactory.create_user_client]!
 
     Args:
         user_id: User ID.

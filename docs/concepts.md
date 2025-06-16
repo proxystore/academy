@@ -63,9 +63,9 @@ The handle also listens for response messages and accordingly sets the result on
 ## Exchanges and Mailboxes
 
 Entities communicate by sending and receiving messages to and from mailboxes.
-Mailboxes are managed by an Exchange, and this protocol defines methods for registering new agent or client mailboxes, sending and receiving messages, and creating handles to remote agents.
-A ExchangeFactory is initially unbound. That is not attached to a mailbox. In this state it is not able to send or receive messages. In order to act on the exchange, the ExchangeFactory must [`bind`][academy.exchange.ExchangeFactory.bind_as_client] to a mailbox so it is able to receive responses to its actions.
-Registering an agent or client involves creating a unique ID for the entity, which is also the address of its mailbox, and initializing that mailbox within the exchange.
+Mailboxes are managed by an exchange, and the [`ExchangeClient`][academy.exchange.ExchangeClient] protocol defines methods for interacting with the exchange and creating handles to other agents.
+An [`ExchangeFactory`][academy.exchange.ExchangeFactory] is used to register a new entity with the exchange and create a client that the entity can use for communicating with the exchange.
+Registering an entity involves creating a unique ID for the entity, which is also the address of its mailbox, and initializing that mailbox within the exchange.
 
 A mailbox has two states: open and closed.
 Open indicates that the entity is accepting messages, even if, for example, an agent has not yet started or is temporarily offline.
@@ -73,10 +73,10 @@ Closed indicates permanent termination of the entity and will cause [`MailboxClo
 
 Academy provides many exchange implementations for different scenarios, such as:
 
-* [`ThreadExchange`][academy.exchange.thread.ThreadExchangeClient]: Uses thread-safe queues for single-process, multiple-agent scenarios. Useful for testing and development.
-* [`HttpExchange`][academy.exchange.cloud.client.HttpExchangeClient]: Centralized service that maintains mailboxes and exposes a REST API. Lower performance but easy to extend with common authentication tools.
-* [`RedisExchange`][academy.exchange.redis.RedisExchangeClient]: Stores state and mailboxes in a Redis server. Use of Redis enables optional replication and cloud-hosting for improved resilience and availability.
-* [`HybridExchange`][academy.exchange.hybrid.HybridExchangeClient]: Entities host their mailbox locally and message each other directly over TCP when possible. Redis is used to map mailbox IDs to address and port pairs, and to store messages for offline entities or when two entities cannot directly communicate (such as when behind NATs).
+* [**Threaded**][academy.exchange.thread.ThreadExchangeFactory]: Uses thread-safe queues for single-process, multiple-agent scenarios. Useful for testing and development.
+* [**HTTP**][academy.exchange.cloud.client.HttpExchangeFactory]: Centralized service that maintains mailboxes and exposes a REST API. Lower performance but easy to extend with common authentication tools.
+* [**Redis**][academy.exchange.redis.RedisExchangeFactory]: Stores state and mailboxes in a Redis server. Use of Redis enables optional replication and cloud-hosting for improved resilience and availability.
+* [**HybridExchange**][academy.exchange.hybrid.HybridExchangeFactory]: Entities host their mailbox locally and message each other directly over TCP when possible. Redis is used to map mailbox IDs to address and port pairs, and to store messages for offline entities or when two entities cannot directly communicate (such as when behind NATs).
 
 ## Launcher
 

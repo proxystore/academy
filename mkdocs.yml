@@ -137,7 +137,7 @@ plugins:
           setup_commands:
             - import pytkdocs_tweaks
             - pytkdocs_tweaks.main()
-          import:
+          inventories:
             - https://docs.python.org/3/objects.inv
             - https://docs.proxystore.dev/main/objects.inv
             - https://extensions.proxystore.dev/main/objects.inv
