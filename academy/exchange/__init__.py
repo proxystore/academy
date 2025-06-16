@@ -88,7 +88,7 @@ class ExchangeFactory(abc.ABC):
         ```python
         factory = ExchangeFactory(...)
         user_client = factory.create_user_client()
-        agent_id = user_client.register_agent()
+        agent_id = user_client.register_agent(...)
         agent_client = factory.create_agent_client(agent_id, ...)
         ```
 
@@ -115,7 +115,7 @@ class ExchangeFactory(abc.ABC):
         self,
         *,
         name: str | None = None,
-        start_listener: bool = False,
+        start_listener: bool = True,
     ) -> UserExchangeClient:
         """Create a new user in the exchange and associated client.
 
@@ -147,6 +147,12 @@ class ExchangeTransport(abc.ABC):
         client instances receiving from the same mailbox produces undefined
         behavior.
     """
+
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}({self.mailbox_id!r})'
+
+    def __str__(self) -> str:
+        return f'{type(self).__name__}<{self.mailbox_id}>'
 
     def __enter__(self) -> Self:
         return self
@@ -442,14 +448,14 @@ class ExchangeClient(abc.ABC):
         while True:
             try:
                 message = self._transport.recv()
-                logger.debug(
-                    'Received %s from %s for %s',
-                    type(message).__name__,
-                    message.src,
-                    self._transport.mailbox_id,
-                )
             except MailboxClosedError:
                 break
+            logger.debug(
+                'Received %s from %s for %s',
+                type(message).__name__,
+                message.src,
+                self._transport.mailbox_id,
+            )
             self._handle_message(message)
 
     @abc.abstractmethod
@@ -511,8 +517,8 @@ class AgentExchangeClient(ExchangeClient, Generic[BehaviorT]):
                 handle = self._handles[message.label]
             except KeyError:
                 logger.warning(
-                    '%s exchange client received unexpected response message '
-                    'from %s but no corresponding handle exists.',
+                    'Exchange client for %s received an unexpected response '
+                    'message from %s but no corresponding handle exists.',
                     self.agent_id,
                     message.src,
                 )
@@ -540,7 +546,7 @@ class UserExchangeClient(ExchangeClient):
         user_id: ClientId,
         transport: ExchangeTransport,
         *,
-        start_listener: bool = False,
+        start_listener: bool = True,
     ) -> None:
         super().__init__(transport)
         self._user_id = user_id
@@ -583,7 +589,7 @@ class UserExchangeClient(ExchangeClient):
             response = message.error(error)
             self._transport.send(response.dest, response)
             logger.warning(
-                '%s exchange client received unexpected request message '
+                'Exchange client for %s received unexpected request message '
                 'from %s',
                 self.user_id,
                 message.src,
@@ -591,10 +597,10 @@ class UserExchangeClient(ExchangeClient):
         elif isinstance(message, get_args(ResponseMessage)):
             try:
                 handle = self._handles[message.label]
-            except KeyError:
+            except KeyError:  # pragma: no cover
                 logger.warning(
-                    '%s exchange client received unexpected response message '
-                    'from %s but no corresponding handle exists.',
+                    'Exchange client for %s received an unexpected response '
+                    'message from %s but no corresponding handle exists.',
                     self.user_id,
                     message.src,
                 )

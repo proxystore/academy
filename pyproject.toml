@@ -123,6 +123,7 @@ target-version = "py39"
 
 [tool.ruff.format]
 indent-style = "space"
+line-ending = "lf"
 quote-style = "single"
 
 [tool.ruff.lint]

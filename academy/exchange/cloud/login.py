@@ -81,7 +81,6 @@ def get_token_storage(
         basepath = os.environ.get('ACADEMY_HOME', default=default)
         filepath = os.path.join(basepath, _TOKENS_FILE)
 
-    print(filepath)
     filepath = pathlib.Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteTokenStorage(filepath, namespace=namespace)

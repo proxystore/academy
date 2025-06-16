@@ -48,6 +48,7 @@ from pydantic import ValidationError
 from academy.behavior import Behavior
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
+from academy.exchange import MailboxStatus
 from academy.exchange.cloud.authenticate import Authenticator
 from academy.exchange.cloud.authenticate import get_authenticator
 from academy.exchange.cloud.config import ExchangeAuthConfig
@@ -86,13 +87,21 @@ class _MailboxManager:
     ) -> bool:
         return entity not in self._owners or self._owners[entity] == client
 
-    def check_mailbox(self, client: str | None, uid: EntityId) -> bool:
-        if not self.has_permissions(client, uid):
+    def check_mailbox(
+        self,
+        client: str | None,
+        uid: EntityId,
+    ) -> MailboxStatus:
+        if uid not in self._mailboxes:
+            return MailboxStatus.MISSING
+        elif not self.has_permissions(client, uid):
             raise ForbiddenError(
                 'Client does not have correct permissions.',
             )
-
-        return uid in self._mailboxes
+        elif self._mailboxes[uid].closed():
+            return MailboxStatus.TERMINATED
+        else:
+            return MailboxStatus.ACTIVE
 
     def create_mailbox(
         self,
@@ -275,13 +284,13 @@ async def _check_mailbox_route(request: Request) -> Response:
 
     client_id = request.headers.get('client_id', None)
     try:
-        exists = manager.check_mailbox(client_id, mailbox_id)
+        status = manager.check_mailbox(client_id, mailbox_id)
     except ForbiddenError:
         return Response(
             status=_FORBIDDEN_CODE,
             text='Incorrect permissions',
         )
-    return json_response({'exists': exists})
+    return json_response({'status': status.value})
 
 
 async def _send_message_route(request: Request) -> Response:

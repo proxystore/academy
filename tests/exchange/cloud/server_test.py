@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import pathlib
 import time
@@ -17,6 +18,7 @@ from aiohttp.web import Request
 
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxClosedError
+from academy.exchange import MailboxStatus
 from academy.exchange.cloud.client import HttpExchangeFactory
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.config import ExchangeServingConfig
@@ -62,7 +64,11 @@ client_id = "ABC"
 
 
 def test_server_run() -> None:
-    config = ExchangeServingConfig(host='127.0.0.1', port=open_port())
+    config = ExchangeServingConfig(
+        host='127.0.0.1',
+        port=open_port(),
+        log_level=logging.ERROR,
+    )
     context = multiprocessing.get_context('spawn')
     process = context.Process(target=_run, args=(config,))
     process.start()
@@ -84,8 +90,13 @@ def test_server_run() -> None:
     process.join()
 
 
+@pytest.mark.filterwarnings('ignore:Unverified HTTPS request is being made')
 def test_server_run_ssl(ssl_context: SSLContextFixture) -> None:
-    config = ExchangeServingConfig(host='127.0.0.1', port=open_port())
+    config = ExchangeServingConfig(
+        host='127.0.0.1',
+        port=open_port(),
+        log_level=logging.ERROR,
+    )
     config.certfile = ssl_context.certfile
     config.keyfile = ssl_context.keyfile
 
@@ -118,9 +129,9 @@ async def test_mailbox_manager_create_close() -> None:
     uid = ClientId.new()
     # Should do nothing since mailbox doesn't exist
     await manager.terminate(user_id, uid)
-    assert not manager.check_mailbox(user_id, uid)
+    assert manager.check_mailbox(user_id, uid) == MailboxStatus.MISSING
     manager.create_mailbox(user_id, uid)
-    assert manager.check_mailbox(user_id, uid)
+    assert manager.check_mailbox(user_id, uid) == MailboxStatus.ACTIVE
     manager.create_mailbox(user_id, uid)  # Idempotent check
 
     bad_user = str(uuid.uuid4())  # Authentication check

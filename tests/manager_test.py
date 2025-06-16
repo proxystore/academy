@@ -43,7 +43,7 @@ def test_reply_to_requests_with_error() -> None:
         exchange=exchange,
         launcher=ThreadLauncher(),
     ) as manager:
-        with exchange.create_user_client() as client:
+        with exchange.create_user_client(start_listener=False) as client:
             request = PingRequest(
                 src=client.user_id,
                 dest=manager.mailbox_id,

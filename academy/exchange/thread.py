@@ -151,7 +151,6 @@ class ThreadExchangeTransport(ExchangeTransport, NoPickleMixin):
         aid: AgentId[BehaviorT] = (
             AgentId.new(name=name) if _agent_id is None else _agent_id
         )
-        assert aid not in self._state.queues
         self._state.queues[aid] = Queue()
         self._state.behaviors[aid] = behavior
         return aid

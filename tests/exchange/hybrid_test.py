@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import pickle
 import uuid
 from unittest import mock
 
@@ -14,6 +15,14 @@ from academy.socket import open_port
 from testing.behavior import EmptyBehavior
 from testing.constant import TEST_CONNECTION_TIMEOUT
 from testing.constant import TEST_THREAD_JOIN_TIMEOUT
+
+
+def test_factory_serialize(
+    hybrid_exchange_factory: HybridExchangeFactory,
+) -> None:
+    pickled = pickle.dumps(hybrid_exchange_factory)
+    reconstructed = pickle.loads(pickled)
+    assert isinstance(reconstructed, HybridExchangeFactory)
 
 
 def test_key_namespaces(mock_redis) -> None:
@@ -69,7 +78,7 @@ def test_mailbox_redis_error_logging(
 ) -> None:
     caplog.set_level(logging.ERROR)
     with mock.patch(
-        'academy.exchange.hybrid.HybridExchangeClient._pull_messages_from_redis',
+        'academy.exchange.hybrid.HybridExchangeTransport._pull_messages_from_redis',
         side_effect=RuntimeError('Mock thread error.'),
     ):
         with hybrid_exchange_factory._create_transport() as transport:

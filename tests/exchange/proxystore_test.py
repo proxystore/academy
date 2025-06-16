@@ -13,7 +13,7 @@ from proxystore.store.executor import ProxyAlways
 from proxystore.store.executor import ProxyNever
 
 from academy.exchange import MailboxStatus
-from academy.exchange.cloud.transport import HttpExchangeFactory
+from academy.exchange.cloud.client import HttpExchangeFactory
 from academy.exchange.proxystore import ProxyStoreExchangeFactory
 from academy.exchange.thread import ThreadExchangeFactory
 from academy.message import ActionRequest
@@ -56,6 +56,9 @@ def test_wrap_basic_transport_functionality(
     )
 
     with wrapped_factory._create_transport() as wrapped_transport1:
+        new_factory = wrapped_transport1.factory()
+        assert isinstance(new_factory, ProxyStoreExchangeFactory)
+
         src = wrapped_transport1.mailbox_id
         dest = wrapped_transport1.register_agent(EmptyBehavior)
         assert wrapped_transport1.status(dest) == MailboxStatus.ACTIVE
@@ -103,6 +106,7 @@ def test_wrap_basic_transport_functionality(
 
         assert wrapped_transport1.discover(EmptyBehavior) == (dest,)
 
+        wrapped_transport1.terminate(wrapped_transport1.mailbox_id)
         wrapped_transport2.close()
 
 

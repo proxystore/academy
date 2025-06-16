@@ -13,6 +13,7 @@ from academy.exchange import ExchangeFactory
 from academy.exchange import ExchangeTransport
 from academy.exchange import MailboxStatus
 from academy.identifier import AgentId
+from academy.identifier import ClientId
 from academy.message import PingRequest
 from testing.behavior import EmptyBehavior
 
@@ -32,6 +33,11 @@ def transport(request) -> Generator[ExchangeTransport]:
         yield transport
 
 
+def test_transport_repr(transport: ExchangeTransport) -> None:
+    assert isinstance(repr(transport), str)
+    assert isinstance(str(transport), str)
+
+
 def test_transport_create_factory(transport: ExchangeTransport) -> None:
     new_factory = transport.factory()
     assert isinstance(new_factory, ExchangeFactory)
@@ -40,6 +46,16 @@ def test_transport_create_factory(transport: ExchangeTransport) -> None:
 def test_transport_register_agent(transport: ExchangeTransport) -> None:
     agent_id = transport.register_agent(EmptyBehavior)
     assert transport.status(agent_id) == MailboxStatus.ACTIVE
+
+
+def test_transport_status(transport: ExchangeTransport) -> None:
+    uid = ClientId.new()
+    assert transport.status(uid) == MailboxStatus.MISSING
+    aid = transport.register_agent(EmptyBehavior)
+    assert transport.status(aid) == MailboxStatus.ACTIVE
+    transport.terminate(aid)
+    transport.terminate(aid)  # Idempotency
+    assert transport.status(aid) == MailboxStatus.TERMINATED
 
 
 def test_transport_send_recv(transport: ExchangeTransport) -> None:

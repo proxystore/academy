@@ -151,7 +151,12 @@ class Agent(Generic[BehaviorT]):
     def __reduce__(self) -> Any:
         return (
             _agent_trampoline,
-            (self.behavior, self.agent_id, self.exchange, self.config),
+            (
+                self.behavior,
+                self.agent_id,
+                self.exchange.factory(),
+                self.config,
+            ),
         )
 
     def _bind_handle(self, handle: Handle[BehaviorT]) -> Handle[BehaviorT]:

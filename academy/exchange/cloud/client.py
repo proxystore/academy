@@ -35,7 +35,6 @@ from academy.identifier import ClientId
 from academy.identifier import EntityId
 from academy.message import BaseMessage
 from academy.message import Message
-from academy.message import PingRequest
 from academy.serialize import NoPickleMixin
 from academy.socket import wait_connection
 
@@ -269,21 +268,12 @@ class HttpExchangeTransport(ExchangeTransport, NoPickleMixin):
         response.raise_for_status()
 
     def status(self, uid: EntityId) -> MailboxStatus:
-        # TODO: Create new status endpoint (See Issue #118)
-        try:
-            self.send(
-                uid,
-                PingRequest(
-                    src=self.mailbox_id,
-                    dest=uid,
-                ),
-            )
-        except BadEntityIdError:
-            return MailboxStatus.MISSING
-        except MailboxClosedError:
-            return MailboxStatus.TERMINATED
-
-        return MailboxStatus.ACTIVE
+        response = self._session.get(
+            self._mailbox_url,
+            json={'mailbox': uid.model_dump_json()},
+        )
+        response.raise_for_status()
+        return MailboxStatus(response.json()['status'])
 
     def terminate(self, uid: EntityId) -> None:
         response = self._session.delete(

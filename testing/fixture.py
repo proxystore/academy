@@ -43,7 +43,9 @@ def thread_exchange_factory() -> ThreadExchangeFactory:
 
 @pytest.fixture
 def exchange() -> Generator[UserExchangeClient]:
-    with ThreadExchangeFactory().create_user_client() as client:
+    with ThreadExchangeFactory().create_user_client(
+        start_listener=False,
+    ) as client:
         yield client
 
 
