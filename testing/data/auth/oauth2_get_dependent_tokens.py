@@ -5,6 +5,8 @@ from globus_sdk._testing.models import ResponseSet
 from globus_sdk._testing.registry import register_response_set
 from responses import matchers
 
+from academy.exchange.cloud.scopes import ACADEMY_EXCHANGE_ID
+
 RESPONSES = ResponseSet(
     default=RegisteredResponse(
         service='auth',
@@ -12,12 +14,12 @@ RESPONSES = ResponseSet(
         method='POST',
         json=[
             {
-                'scope': 'https://auth.globus.org/scopes/a7e16357-8edf-414d-9e73-85e4b0b18be4/academy_exchange',
+                'scope': 'https://auth.globus.org/scopes/{ACADEMY_EXCHANGE_ID}/academy_exchange',
                 'access_token': 'academyToken',
                 'refresh_token': 'academyRefreshToken',
                 'token_type': 'bearer',
                 'expires_in': 120,
-                'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+                'resource_server': ACADEMY_EXCHANGE_ID,
             },
         ],
         match=[
@@ -31,10 +33,10 @@ RESPONSES = ResponseSet(
         ],
         metadata={
             'rs_data': {
-                'a7e16357-8edf-414d-9e73-85e4b0b18be4': {
+                '{ACADEMY_EXCHANGE_ID}': {
                     'access_token': 'academyToken',
                     'refresh_token': 'academyRefreshToken',
-                    'scope': 'https://auth.globus.org/scopes/a7e16357-8edf-414d-9e73-85e4b0b18be4/academy_exchange',
+                    'scope': 'https://auth.globus.org/scopes/{ACADEMY_EXCHANGE_ID}/academy_exchange',
                 },
             },
         },

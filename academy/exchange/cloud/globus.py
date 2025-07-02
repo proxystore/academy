@@ -315,10 +315,18 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
 
         loop = asyncio.get_running_loop()
         if self._auth_client is None:
+            authorizer = self._authorizer
+            if authorizer is None:
+                assert isinstance(globus_sdk.AuthClient.resource_server, str)
+                loop.run_in_executor(
+                    None,
+                    self._app.get_authorizer,
+                    globus_sdk.AuthClient.resource_server,
+                )
+
             # TODO: Should we create a client as the user or as the service?
             self._auth_client = AuthClient(
-                app=self._app,
-                authorizer=self._authorizer,
+                authorizer=authorizer,
             )
 
         # Create client id

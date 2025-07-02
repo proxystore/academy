@@ -5,38 +5,63 @@ from globus_sdk._testing.models import ResponseSet
 from globus_sdk._testing.registry import register_response_set
 from responses import matchers
 
+from academy.exchange.cloud.scopes import ACADEMY_EXCHANGE_ID
 from testing.data.auth._common import CLIENT_ID
 
 _token = 'DUMMY_TRANSFER_TOKEN_FROM_THE_INTERTUBES'
-_scope = 'https://auth.globus.org/scopes/a7e16357-8edf-414d-9e73-85e4b0b18be4/academy_exchange'
+_academy_scope = (
+    f'https://auth.globus.org/scopes/{ACADEMY_EXCHANGE_ID}/academy_exchange'
+)
+_agent_scope = f'https://auth.globus.org/scopes/{CLIENT_ID}/launch'
 
 RESPONSES = ResponseSet(
-    default=RegisteredResponse(
+    auth=RegisteredResponse(
         service='auth',
         path='/v2/oauth2/token',
         method='POST',
         status=200,
         json={
-            'access_token': _token,
-            'scope': _scope,
+            'access_token': 'auth_access_token',
+            'scope': 'openid',
             'expires_in': 172800,
             'token_type': 'Bearer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': 'auth.globus.org',
             'other_tokens': [],
         },
         match=[
             matchers.urlencoded_params_matcher(
                 {
                     'grant_type': 'client_credentials',
-                    'scope': 'openid openid profile email',
+                    'scope': 'openid',
+                },
+            ),
+        ],
+    ),
+    client=RegisteredResponse(
+        service='auth',
+        path='/v2/oauth2/token',
+        method='POST',
+        status=200,
+        json={
+            'access_token': _token,
+            'scope': _academy_scope,
+            'expires_in': 172800,
+            'token_type': 'Bearer',
+            'resource_server': ACADEMY_EXCHANGE_ID,
+            'other_tokens': [],
+        },
+        match=[
+            matchers.urlencoded_params_matcher(
+                {
+                    'grant_type': 'client_credentials',
+                    'scope': f'https://auth.globus.org/scopes/{ACADEMY_EXCHANGE_ID}/academy_exchange',
                 },
             ),
         ],
         metadata={
-            'service': 'transfer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': ACADEMY_EXCHANGE_ID,
             'access_token': _token,
-            'scope': _scope,
+            'scope': _academy_scope,
         },
     ),
     agent=RegisteredResponse(
@@ -46,25 +71,24 @@ RESPONSES = ResponseSet(
         status=200,
         json={
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
             'expires_in': 172800,
             'token_type': 'Bearer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'other_tokens': [],
         },
         match=[
             matchers.urlencoded_params_matcher(
                 {
                     'grant_type': 'client_credentials',
-                    'scope': f'https://auth.globus.org/scopes/{CLIENT_ID}/launch',
+                    'scope': _agent_scope,
                 },
             ),
         ],
         metadata={
-            'service': 'transfer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
         },
     ),
     agent_2=RegisteredResponse(
@@ -74,26 +98,24 @@ RESPONSES = ResponseSet(
         status=200,
         json={
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
             'expires_in': 172800,
             'token_type': 'Bearer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'other_tokens': [],
         },
         match=[
             matchers.urlencoded_params_matcher(
                 {
                     'grant_type': 'client_credentials',
-                    'scope': f'https://auth.globus.org/scopes/{CLIENT_ID}/launch '  # noqa 501
-                    f'https://auth.globus.org/scopes/{CLIENT_ID}/launch',
+                    'scope': f'{_agent_scope} {_agent_scope}',
                 },
             ),
         ],
         metadata={
-            'service': 'transfer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
         },
     ),
     agent_3=RegisteredResponse(
@@ -103,27 +125,24 @@ RESPONSES = ResponseSet(
         status=200,
         json={
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
             'expires_in': 172800,
             'token_type': 'Bearer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'other_tokens': [],
         },
         match=[
             matchers.urlencoded_params_matcher(
                 {
                     'grant_type': 'client_credentials',
-                    'scope': f'https://auth.globus.org/scopes/{CLIENT_ID}/launch '  # noqa E501
-                    f'https://auth.globus.org/scopes/{CLIENT_ID}/launch '
-                    f'https://auth.globus.org/scopes/{CLIENT_ID}/launch',
+                    'scope': f'{_agent_scope} {_agent_scope} {_agent_scope}',
                 },
             ),
         ],
         metadata={
-            'service': 'transfer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': CLIENT_ID,
             'access_token': _token,
-            'scope': _scope,
+            'scope': _agent_scope,
         },
     ),
     dependent=RegisteredResponse(
@@ -133,10 +152,10 @@ RESPONSES = ResponseSet(
         status=200,
         json={
             'access_token': _token,
-            'scope': _scope,
+            'scope': _academy_scope,
             'expires_in': 172800,
             'token_type': 'Bearer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': ACADEMY_EXCHANGE_ID,
             'other_tokens': [],
         },
         match=[
@@ -148,10 +167,9 @@ RESPONSES = ResponseSet(
             ),
         ],
         metadata={
-            'service': 'transfer',
-            'resource_server': 'a7e16357-8edf-414d-9e73-85e4b0b18be4',
+            'resource_server': ACADEMY_EXCHANGE_ID,
             'access_token': _token,
-            'scope': _scope,
+            'scope': _academy_scope,
         },
     ),
 )
