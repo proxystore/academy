@@ -289,9 +289,11 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             except AcademyAPIError as e:
                 if e.http_status == StatusCode.TERMINATED.value:
                     raise MailboxTerminatedError(self.mailbox_id) from e
-                elif e.http_status == StatusCode.TIMEOUT.value:
+                elif (
+                    e.http_status == StatusCode.TIMEOUT.value
+                ):  # pragma: no cover
                     raise TimeoutError() from e
-                raise e
+                raise e  # pragma: no cover
         except asyncio.TimeoutError as e:
             # In older versions of Python, ayncio.TimeoutError and TimeoutError
             # are different types.
@@ -315,20 +317,19 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
 
         loop = asyncio.get_running_loop()
         if self._auth_client is None:
-            authorizer = self._authorizer
-            if authorizer is None:
-                assert isinstance(globus_sdk.AuthClient.resource_server, str)
+            # Need assert because globus_sdk annotations are not tight
+            assert isinstance(globus_sdk.AuthClient.resource_server, str)
 
-                # TODO: This may issues a request, but putting it inside an
-                # executor causes a race condition.
-                authorizer = self._app.get_authorizer(
-                    globus_sdk.AuthClient.resource_server,
-                )
-                # loop.run_in_executor(
-                #     None,
-                #     self._app.get_authorizer,
-                #     globus_sdk.AuthClient.resource_server,
-                # )
+            # TODO: This may issues a request, but putting it inside an
+            # executor causes a race condition.
+            authorizer = self._app.get_authorizer(
+                globus_sdk.AuthClient.resource_server,
+            )
+            # loop.run_in_executor(
+            #     None,
+            #     self._app.get_authorizer,
+            #     globus_sdk.AuthClient.resource_server,
+            # )
 
             # TODO: Should we create a client as the user or as the service?
             self._auth_client = AuthClient(
@@ -426,7 +427,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 raise BadEntityIdError(message.dest) from e
             elif e.http_status == StatusCode.TERMINATED.value:
                 raise MailboxTerminatedError(message.dest) from e
-            raise e
+            raise e  # pragma: no cover
 
     async def status(self, uid: EntityId) -> MailboxStatus:
         loop = asyncio.get_running_loop()
