@@ -22,5 +22,6 @@ from testing.fixture import hybrid_exchange_factory
 from testing.fixture import local_exchange_factory
 from testing.fixture import manager
 from testing.fixture import redis_exchange_factory
+from testing.fixture import set_temp_token_storage
 from testing.redis import mock_redis
 from testing.ssl import ssl_context

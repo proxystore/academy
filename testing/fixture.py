@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -12,6 +13,7 @@ import responses
 from aiohttp.web import AppRunner
 from aiohttp.web import TCPSite
 from globus_sdk._testing import load_response
+from globus_sdk._testing import load_response_set
 
 from academy.exchange import ExchangeFactory
 from academy.exchange import HttpExchangeFactory
@@ -67,11 +69,7 @@ async def globus_exchange_factory(
     load_response('auth.create_client_credentials')
     load_response('auth.create_scope')
     load_response('auth.oauth2_get_dependent_tokens')
-    load_response('auth.oauth2_client_credentials_tokens')
-    load_response('auth.oauth2_client_credentials_tokens', case='agent')
-    load_response('auth.oauth2_client_credentials_tokens', case='agent_2')
-    load_response('auth.oauth2_client_credentials_tokens', case='agent_3')
-    load_response('auth.oauth2_client_credentials_tokens', case='dependent')
+    load_response_set('auth.oauth2_client_credentials_tokens')
 
     return GlobusExchangeFactory()
 
@@ -159,23 +157,7 @@ async def get_factory(
             load_response('auth.create_client_credentials')
             load_response('auth.create_scope')
             load_response('auth.oauth2_get_dependent_tokens')
-            load_response('auth.oauth2_client_credentials_tokens')
-            load_response(
-                'auth.oauth2_client_credentials_tokens',
-                case='agent',
-            )
-            load_response(
-                'auth.oauth2_client_credentials_tokens',
-                case='agent_2',
-            )
-            load_response(
-                'auth.oauth2_client_credentials_tokens',
-                case='agent_3',
-            )
-            load_response(
-                'auth.oauth2_client_credentials_tokens',
-                case='dependent',
-            )
+            load_response_set('auth.oauth2_client_credentials_tokens')
 
             return GlobusExchangeFactory()
         else:
@@ -215,3 +197,12 @@ async def http_exchange_server() -> AsyncGenerator[tuple[str, int]]:
         yield host, port
     finally:
         await runner.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def set_temp_token_storage(monkeypatch, tmp_path: pathlib.Path):
+    """Temporary token storage after each test.
+
+    For repeatability, especially in CI pipeline.
+    """
+    monkeypatch.setitem(os.environ, 'ACADEMY_HOME', str(tmp_path))
