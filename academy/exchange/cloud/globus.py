@@ -276,20 +276,22 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
     async def recv(self, timeout: float | None = None) -> Message[Any]:
         loop = asyncio.get_running_loop()
         try:
-            async with asyncio.timeout(timeout):
-                try:
-                    response = await loop.run_in_executor(
+            try:
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
                         None,
                         self._client.recv,
                         self.mailbox_id,
-                    )
-                    message_raw = response['message']
-                except AcademyAPIError as e:
-                    if e.http_status == StatusCode.TERMINATED.value:
-                        raise MailboxTerminatedError(self.mailbox_id) from e
-                    elif e.http_status == StatusCode.TIMEOUT.value:
-                        raise TimeoutError() from e
-                    raise e
+                    ),
+                    timeout,
+                )
+                message_raw = response['message']
+            except AcademyAPIError as e:
+                if e.http_status == StatusCode.TERMINATED.value:
+                    raise MailboxTerminatedError(self.mailbox_id) from e
+                elif e.http_status == StatusCode.TIMEOUT.value:
+                    raise TimeoutError() from e
+                raise e
         except asyncio.TimeoutError as e:
             # In older versions of Python, ayncio.TimeoutError and TimeoutError
             # are different types.
