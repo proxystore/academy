@@ -53,7 +53,6 @@ dev = [
     "tox",
     "virtualenv",
     "responses",
-    "globus_sdk==3.56.1",
 ]
 docs = [
     "black==25.1.0",

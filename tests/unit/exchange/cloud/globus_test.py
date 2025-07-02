@@ -33,27 +33,27 @@ def academy_client():
 def test_globus_client_discover(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.discover)
     response = academy_client.discover(EmptyAgent)
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
     assert 'agent_ids' in response.data
 
 
 def test_globus_client_recv(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.recv)
     response = academy_client.recv(UserId.new())
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
     assert 'message' in response.data
 
 
 def test_globus_client_register_agent(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.register_agent)
     response = academy_client.register_agent(AgentId.new(), EmptyAgent)
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
 
 
 def test_globus_client_register_client(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.register_client)
     response = academy_client.register_client(UserId.new())
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
 
 
 def test_globus_client_send(academy_client: AcademyGlobusClient):
@@ -66,14 +66,14 @@ def test_globus_client_send(academy_client: AcademyGlobusClient):
         body=PingRequest(),
     )
     response = academy_client.send(message)
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
 
 
 def test_globus_client_status(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.status)
     agent: AgentId[Any] = AgentId.new()
     response = academy_client.status(agent)
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value
     assert 'status' in response.data
 
 
@@ -81,4 +81,4 @@ def test_globus_client_terminate(academy_client: AcademyGlobusClient):
     load_response(AcademyGlobusClient.terminate)
     agent: AgentId[Any] = AgentId.new()
     response = academy_client.terminate(agent)
-    assert response.http_status == StatusCode.OKAY
+    assert response.http_status == StatusCode.OKAY.value

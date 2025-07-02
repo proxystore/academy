@@ -33,9 +33,7 @@ from academy.exception import MailboxTerminatedError
 from academy.exchange import ExchangeFactory
 from academy.exchange.cloud.login import get_globus_app
 from academy.exchange.cloud.scopes import AcademyExchangeScopes
-from academy.exchange.cloud.server import _FORBIDDEN_CODE
-from academy.exchange.cloud.server import _NOT_FOUND_CODE
-from academy.exchange.cloud.server import _TIMEOUT_CODE
+from academy.exchange.cloud.server import StatusCode
 from academy.exchange.transport import ExchangeTransportMixin
 from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
@@ -287,9 +285,9 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                     )
                     message_raw = response['message']
                 except AcademyAPIError as e:
-                    if e.http_status == _FORBIDDEN_CODE:
+                    if e.http_status == StatusCode.TERMINATED.value:
                         raise MailboxTerminatedError(self.mailbox_id) from e
-                    elif e.http_status == _TIMEOUT_CODE:
+                    elif e.http_status == StatusCode.TIMEOUT.value:
                         raise TimeoutError() from e
                     raise e
         except asyncio.TimeoutError as e:
@@ -318,11 +316,17 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             authorizer = self._authorizer
             if authorizer is None:
                 assert isinstance(globus_sdk.AuthClient.resource_server, str)
-                loop.run_in_executor(
-                    None,
-                    self._app.get_authorizer,
+
+                # TODO: This may issues a request, but putting it inside an
+                # executor causes a race condition.
+                authorizer = self._app.get_authorizer(
                     globus_sdk.AuthClient.resource_server,
                 )
+                # loop.run_in_executor(
+                #     None,
+                #     self._app.get_authorizer,
+                #     globus_sdk.AuthClient.resource_server,
+                # )
 
             # TODO: Should we create a client as the user or as the service?
             self._auth_client = AuthClient(
@@ -377,11 +381,14 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         self._app.add_scope_requirements(
             {client_id: [scope]},
         )
-        authorizer = await loop.run_in_executor(
-            None,
-            self._app.get_authorizer,
-            client_id,
-        )
+        # TODO: This may issues a request, but putting it inside an executor
+        # causes a race condition.
+        authorizer = self._app.get_authorizer(client_id)
+        # authorizer = await loop.run_in_executor(
+        #     None,
+        #     self._app.get_authorizer,
+        #     client_id,
+        # )
 
         bearer = await loop.run_in_executor(
             None,
@@ -413,9 +420,9 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 message,
             )
         except AcademyAPIError as e:
-            if e.http_status == _NOT_FOUND_CODE:
+            if e.http_status == StatusCode.NOT_FOUND.value:
                 raise BadEntityIdError(message.dest) from e
-            elif e.http_status == _FORBIDDEN_CODE:
+            elif e.http_status == StatusCode.TERMINATED.value:
                 raise MailboxTerminatedError(message.dest) from e
             raise e
 
