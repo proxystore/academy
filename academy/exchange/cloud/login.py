@@ -16,9 +16,10 @@ from globus_sdk.globus_app import GlobusApp
 from globus_sdk.globus_app import GlobusAppConfig
 from globus_sdk.globus_app import UserApp
 from globus_sdk.login_flows import CommandLineLoginFlowManager
-from globus_sdk.scopes import ScopeBuilder
-from globus_sdk.tokenstorage import SQLiteTokenStorage
+from globus_sdk.tokenstorage import JSONTokenStorage
 from globus_sdk.tokenstorage import TokenValidationError
+
+from academy.exchange.cloud.scopes import AcademyExchangeScopes
 
 # Registered `Academy-Client Application` by alokvk2@uchicago.edu
 ACADEMY_GLOBUS_CLIENT_ID = '1624cf3f-45ee-4f54-9de4-2d5d79191346'
@@ -27,15 +28,7 @@ ACADEMY_GLOBUS_CLIENT_ID_ENV_NAME = 'ACADEMY_GLOBUS_CLIENT_ID'
 ACADEMY_GLOBUS_CLIENT_SECRET_ENV_NAME = 'ACADEMY_GLOBUS_CLIENT_SECRET'
 
 _APP_NAME = 'academy'
-_TOKENS_FILE = 'storage.db'
-
-AcademyExchangeScopes = ScopeBuilder(
-    # "Academy Exchange Server" application client ID
-    'a7e16357-8edf-414d-9e73-85e4b0b18be4',
-    # The academy_exchange scope has scope ID:
-    #   17619205-054c-4829-a1a8-f4b6968c76d2
-    known_url_scopes=['academy_exchange'],
-)
+_TOKENS_FILE = 'storage.json'
 
 
 class _CustomLoginFlowManager(CommandLineLoginFlowManager):
@@ -61,7 +54,7 @@ def get_token_storage(
     filepath: str | pathlib.Path | None = None,
     *,
     namespace: str = 'DEFAULT',
-) -> SQLiteTokenStorage:
+) -> JSONTokenStorage:
     """Create token storage adapter.
 
     Args:
@@ -83,7 +76,7 @@ def get_token_storage(
 
     filepath = pathlib.Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    return SQLiteTokenStorage(filepath, namespace=namespace)
+    return JSONTokenStorage(filepath, namespace=namespace)
 
 
 def get_client_credentials_from_env() -> tuple[str, str]:
