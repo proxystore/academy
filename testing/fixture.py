@@ -40,40 +40,6 @@ async def http_exchange_factory(
     return HttpExchangeFactory(url)
 
 
-@pytest_asyncio.fixture
-async def globus_exchange_factory(
-    monkeypatch,
-    http_exchange_server: tuple[str, int],
-    activate_responses,
-) -> GlobusExchangeFactory:
-    host, port = http_exchange_server
-    base_url = f'http://{host}:{port}'
-    responses.add_passthru(base_url)
-
-    monkeypatch.setattr(AcademyGlobusClient, 'base_url', base_url)
-    monkeypatch.setitem(
-        os.environ,
-        ACADEMY_GLOBUS_CLIENT_ID_ENV_NAME,
-        'dummy_client_id',
-    )
-    monkeypatch.setitem(
-        os.environ,
-        ACADEMY_GLOBUS_CLIENT_SECRET_ENV_NAME,
-        'dummy_client_secret',
-    )
-
-    load_response(
-        'auth.create_client',
-        case='client_type_hybrid_confidential_client_resource_server',
-    )
-    load_response('auth.create_client_credentials')
-    load_response('auth.create_scope')
-    load_response('auth.oauth2_get_dependent_tokens')
-    load_response_set('auth.oauth2_client_credentials_tokens')
-
-    return GlobusExchangeFactory()
-
-
 @pytest.fixture
 def hybrid_exchange_factory(mock_redis) -> HybridExchangeFactory:
     return HybridExchangeFactory(redis_host='localhost', redis_port=0)
