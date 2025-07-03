@@ -5,3 +5,5 @@ TEST_LOOP_SLEEP = 0.001
 TEST_THREAD_JOIN_TIMEOUT = 1
 TEST_SLEEP = 0.001
 TEST_WAIT_TIMEOUT = 1
+
+TEST_ACADEMY_PATH = 'https://exchange.academy.globus.org'
