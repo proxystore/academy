@@ -2,7 +2,7 @@
 
 To start the exchange:
 ```bash
-python -m academy.exchange.cloud --config exchange.yaml
+python -m academy.exchange.cloud --config exchange.toml
 ```
 
 Connect to the exchange through the client.
