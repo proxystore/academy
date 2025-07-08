@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Literal
 from typing import NamedTuple
 
+import emoji
+
 
 class Crd(NamedTuple):
     x: int
@@ -111,26 +113,31 @@ class Board:
         - M = missed guess
         - . = empty water
         """
-        grid = [['.' for _ in range(self.size)] for _ in range(self.size)]
+        grid = [
+            [emoji.emojize(':water_wave:') for _ in range(self.size)]
+            for _ in range(self.size)
+        ]
 
         # place ships
         for ship in self.ships:
             for pos in ship.positions:
                 row, col = pos
-                grid[row][col] = 'S'
+                grid[row][col] = emoji.emojize(':ship:')
 
         # place hits and misses
         for guess in self.guesses:
             row, col = guess
             for ship in self.ships:
                 if guess in ship.positions:
-                    grid[row][col] = 'H'
+                    grid[row][col] = emoji.emojize(':collision:')
                     break
             else:
-                grid[row][col] = 'M'
+                grid[row][col] = emoji.emojize(':bomb:')
 
         # build string representation
-        result = '  ' + ' '.join(str(c) for c in range(self.size)) + '\n'
+        result = (
+            '  ' + '  '.join(str(c) for c in range(self.size)) + '     ' + '\n'
+        )
         for r in range(self.size):
             result += str(r) + ' ' + ' '.join(grid[r]) + '\n'
         return result
@@ -173,8 +180,8 @@ class Game:
         board0_lines = self.boards[0].__repr__().splitlines()
         board1_lines = self.boards[1].__repr__().splitlines()
 
-        result = "Player 0's Board".ljust(25) + ' | ' + "Player 1's Board\n"
-        result += '-' * 25 + '+' + '-' * 25 + '\n'
+        result = "Player 0's Board".ljust(36) + '| ' + "Player 1's Board\n"
+        result += '-' * 36 + '+' + '-' * 36 + '\n'
 
         # zip the rows of the two boards together to show side by side
         for left, right in zip(board0_lines, board1_lines):

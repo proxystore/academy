@@ -32,6 +32,7 @@ dependencies = [
     "redis",
     "tomli ; python_version<'3.11'",
     "typing-extensions>=4.3.0 ; python_version<'3.11'",
+    "emoji",
 ]
 
 [project.urls]
