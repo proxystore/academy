@@ -17,6 +17,7 @@ from academy.exchange.local import LocalExchangeFactory
 from academy.exchange.proxystore import ProxyStoreExchangeFactory
 from academy.message import ActionRequest
 from academy.message import ActionResponse
+from academy.message import Message
 from academy.message import PingRequest
 from testing.agents import EmptyAgent
 
@@ -68,43 +69,52 @@ async def test_wrap_basic_transport_functionality(
         )
         assert wrapped_transport2.mailbox_id == dest
 
-        ping = PingRequest(src=src, dest=dest)
+        ping = Message.create(src=src, dest=dest, body=PingRequest())
         await wrapped_transport1.send(ping)
         assert await wrapped_transport2.recv() == ping
 
-        request = ActionRequest(
-            src=src,
-            dest=dest,
+        sent_request = ActionRequest(
             action='test',
             pargs=('value', 123),
             kargs={'foo': 'value', 'bar': 123},
         )
-        await wrapped_transport1.send(request)
+        sent_request_message = Message.create(
+            src=src,
+            dest=dest,
+            body=sent_request,
+        )
+        await wrapped_transport1.send(sent_request_message)
 
-        received = await wrapped_transport2.recv()
-        assert isinstance(received, ActionRequest)
-        assert request.tag == received.tag
+        recv_request_message = await wrapped_transport2.recv()
+        recv_request = recv_request_message.get_body()
+        assert isinstance(recv_request, ActionRequest)
+        assert sent_request_message.tag == recv_request_message.tag
 
-        for old, new in zip(request.get_args(), received.get_args()):
+        for old, new in zip(sent_request.get_args(), recv_request.get_args()):
             assert (type(new) is Proxy) == should_proxy(old)
             # will resolve the proxy if it exists
             assert old == new
 
-        for name in request.kargs:
-            old, new = request.kargs[name], received.kargs[name]
+        for name in recv_request.get_kwargs():
+            old = sent_request.get_kwargs()[name]
+            new = recv_request.get_kwargs()[name]
             assert (type(new) is Proxy) == should_proxy(old)
             assert old == new
 
-        response = request.response('result')
-        await wrapped_transport2.send(response)
-
-        received = await wrapped_transport1.recv()
-        assert isinstance(received, ActionResponse)
-        assert response.tag == received.tag
-        assert (type(received.get_result()) is Proxy) == should_proxy(
-            response.result,
+        sent_response = ActionResponse(action='test', result='result')
+        sent_response_message = sent_request_message.create_response(
+            sent_response,
         )
-        assert response.result == received.get_result()
+        await wrapped_transport2.send(sent_response_message)
+
+        recv_response_message = await wrapped_transport1.recv()
+        recv_response = recv_response_message.get_body()
+        assert isinstance(recv_response, ActionResponse)
+        assert sent_response_message.tag == recv_response_message.tag
+        assert (type(recv_response.get_result()) is Proxy) == should_proxy(
+            sent_response.get_result(),
+        )
+        assert sent_response.get_result() == recv_response.get_result()
 
         assert await wrapped_transport1.discover(EmptyAgent) == (dest,)
 

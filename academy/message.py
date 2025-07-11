@@ -2,107 +2,53 @@ from __future__ import annotations
 
 import base64
 import pickle
+import sys
 import uuid
 from typing import Any
+from typing import Generic
 from typing import get_args
 from typing import Literal
 from typing import Optional
+from typing import TypeVar
 from typing import Union
+
+if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
+    from typing import Self
+else:  # pragma: <3.11 cover
+    from typing_extensions import Self
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_serializer
-from pydantic import field_validator
 from pydantic import SkipValidation
 from pydantic import TypeAdapter
 
-from academy.identifier import AgentId
 from academy.identifier import EntityId
 
-NO_RESULT = object()
+DEFAULT_FROZEN_CONFIG = ConfigDict(
+    arbitrary_types_allowed=True,
+    extra='forbid',
+    frozen=True,
+    use_enum_values=True,
+    validate_default=True,
+)
+DEFAULT_MUTABLE_CONFIG = ConfigDict(
+    arbitrary_types_allowed=True,
+    extra='forbid',
+    frozen=False,
+    use_enum_values=True,
+    validate_default=True,
+)
 
 
-class BaseMessage(BaseModel):
-    """Base message type for messages between entities (agents or users).
-
-    Note:
-        The [`hash()`][hash] of this type is a combination of the
-        message type and message ID.
-    """
-
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        extra='forbid',
-        frozen=False,
-        use_enum_values=True,
-        validate_default=True,
-    )
-
-    tag: uuid.UUID = Field(
-        default_factory=uuid.uuid4,
-        description='Unique message tag used to match requests and responses.',
-    )
-    src: EntityId = Field(description='Source mailbox address.')
-    dest: EntityId = Field(description='Destination mailbox address.')
-    label: Optional[uuid.UUID] = Field(  # noqa: UP045
-        None,
-        description=(
-            'Optional label used to disambiguate response messages when '
-            'multiple objects (i.e., handles) share the same mailbox. '
-            'This is a different usage from the `tag`.'
-        ),
-    )
-
-    def __hash__(self) -> int:
-        return hash(type(self)) + hash(self.tag) + hash(self.label)
-
-    @classmethod
-    def model_from_json(cls, data: str) -> Message:
-        """Reconstruct a specific message from a JSON dump.
-
-        Example:
-            ```python
-            from academy.message import BaseMessage, ActionRequest
-
-            message = ActionRequest(...)
-            dump = message.model_dump_json()
-            assert BaseMessage.model_from_json(dump) == message
-            ```
-        """
-        return TypeAdapter(Message).validate_json(data)
-
-    @classmethod
-    def model_deserialize(cls, data: bytes) -> Message:
-        """Deserialize a message.
-
-        Warning:
-            This uses pickle and is therefore suceptible to all the
-            typical pickle warnings about code injection.
-        """
-        message = pickle.loads(data)
-        if not isinstance(message, get_args(Message)):
-            raise TypeError(
-                'Deserialized message is not of type Message.',
-            )
-        return message
-
-    def model_serialize(self) -> bytes:
-        """Serialize a message to bytes.
-
-        Warning:
-            This uses pickle and is therefore suceptible to all the
-            typical pickle warnings about code injection.
-        """
-        return pickle.dumps(self)
-
-
-class ActionRequest(BaseMessage):
+class ActionRequest(BaseModel):
     """Agent action request message.
 
-    When this message is dumped to a JSON string, the `pargs` and `kargs`
-    are pickled and then base64 encoded to a string. This can have non-trivial
-    time and space overheads for large arguments.
+    Warning:
+        The positional and keywords arguments for the invoked action are
+        pickled and base64-encoded when serialized to JSON. This can have
+        non-trivial time and space overheads for large arguments.
     """
 
     action: str = Field(description='Name of the requested action.')
@@ -116,19 +62,7 @@ class ActionRequest(BaseMessage):
     )
     kind: Literal['action-request'] = Field('action-request', repr=False)
 
-    def __eq__(self, other: object, /) -> bool:
-        if not isinstance(other, ActionRequest):
-            return False
-        return (
-            self.tag == other.tag
-            and self.src == other.src
-            and self.dest == other.dest
-            and self.label == other.label
-            and self.action == other.action
-        )
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.tag))
+    model_config = DEFAULT_MUTABLE_CONFIG
 
     @field_serializer('pargs', 'kargs', when_used='json')
     def _pickle_and_encode_obj(self, obj: Any) -> str:
@@ -140,7 +74,11 @@ class ActionRequest(BaseMessage):
     def get_args(self) -> tuple[Any, ...]:
         """Get the positional arguments.
 
-        Lazy deserializes the positional arguments and caches the result.
+        Lazily deserializes and returns the positional arguments.
+        Caches the result to avoid redundant decoding.
+
+        Returns:
+            The deserialized tuple of positional arguments.
         """
         if isinstance(self.pargs, str):
             self.pargs = pickle.loads(base64.b64decode(self.pargs))
@@ -149,64 +87,55 @@ class ActionRequest(BaseMessage):
     def get_kwargs(self) -> dict[str, Any]:
         """Get the keyword arguments.
 
-        Lazy deserializes the keyword arguments and caches the result.
+        Lazily deserializes and returns the keyword arguments.
+        Caches the result to avoid redundant decoding.
+
+        Returns:
+            The deserialized dictionary of keyword arguments.
         """
         if isinstance(self.kargs, str):
             self.kargs = pickle.loads(base64.b64decode(self.kargs))
         return self.kargs
 
-    def error(self, exception: Exception) -> ActionResponse:
-        """Construct an error response to action request.
 
-        Args:
-            exception: Error of the action.
-        """
-        return ActionResponse(
-            tag=self.tag,
-            src=self.dest,
-            dest=self.src,
-            label=self.label,
-            action=self.action,
-            result=None,
-            exception=exception,
-        )
+class PingRequest(BaseModel):
+    """Agent ping request message."""
 
-    def response(self, result: Any) -> ActionResponse:
-        """Construct a success response to action request.
+    kind: Literal['ping-request'] = Field('ping-request', repr=False)
 
-        Args:
-            result: Result of the action.
-        """
-        return ActionResponse(
-            tag=self.tag,
-            src=self.dest,
-            dest=self.src,
-            label=self.label,
-            action=self.action,
-            result=result,
-            exception=None,
-        )
+    model_config = DEFAULT_FROZEN_CONFIG
 
 
-class ActionResponse(BaseMessage):
-    """Agent action response message."""
+class ShutdownRequest(BaseModel):
+    """Agent shutdown request message."""
+
+    terminate: Optional[bool] = Field(  # noqa: UP045
+        None,
+        description='Override the termination behavior of the agent.',
+    )
+    kind: Literal['shutdown-request'] = Field('shutdown-request', repr=False)
+
+    model_config = DEFAULT_FROZEN_CONFIG
+
+
+class ActionResponse(BaseModel):
+    """Agent action response message.
+
+    Warning:
+        The result is pickled and base64-encoded when serialized to JSON.
+        This can have non-trivial time and space overheads for large results.
+    """
 
     action: str = Field(description='Name of the requested action.')
     result: SkipValidation[Any] = Field(
-        None,
         description='Result of the action, if successful.',
-    )
-    exception: SkipValidation[Optional[Exception]] = Field(  # noqa: UP045
-        None,
-        description='Exception of the action, if unsuccessful.',
     )
     kind: Literal['action-response'] = Field('action-response', repr=False)
 
+    model_config = DEFAULT_MUTABLE_CONFIG
+
     @field_serializer('result', when_used='json')
     def _pickle_and_encode_result(self, obj: Any) -> Optional[list[Any]]:  # noqa: UP045
-        if obj is None:
-            return None
-
         if (
             isinstance(obj, list)
             and len(obj) == 2  # noqa PLR2004
@@ -224,7 +153,11 @@ class ActionResponse(BaseMessage):
     def get_result(self) -> Any:
         """Get the result.
 
-        Lazy deserializes the result and caches the value.
+        Lazily deserializes and returns the result of the action.
+        Caches the result to avoid redundant decoding.
+
+        Returns:
+            The deserialized result of the action.
         """
         if (
             isinstance(self.result, list)
@@ -234,209 +167,263 @@ class ActionResponse(BaseMessage):
             self.result = pickle.loads(base64.b64decode(self.result[1]))
         return self.result
 
+
+class ErrorResponse(BaseModel):
+    """Error response message.
+
+    Contains the exception raised by a failed request.
+    """
+
+    exception: SkipValidation[Exception] = Field(
+        description='Exception of the failed request.',
+    )
+    kind: Literal['error-response'] = Field('error-response', repr=False)
+
+    model_config = DEFAULT_MUTABLE_CONFIG
+
     @field_serializer('exception', when_used='json')
-    def _pickle_and_encode_exception(self, obj: Any) -> str:
-        if isinstance(obj, str):  # pragma: no cover
-            return obj
+    def _pickle_and_encode_obj(self, obj: Any) -> Optional[str]:  # noqa: UP045
         raw = pickle.dumps(obj)
         return base64.b64encode(raw).decode('utf-8')
 
-    def get_exception(self) -> BaseException | None:
+    def get_exception(self) -> Exception:
         """Get the exception.
 
-        Lazy deserializes the exception and caches the value.
+        Lazily deserializes and returns the exception object.
+        Caches the result to avoid redundant decoding.
+
+        Returns:
+            The deserialized exception.
         """
         if isinstance(self.exception, str):
             self.exception = pickle.loads(base64.b64decode(self.exception))
         return self.exception
 
-    def __eq__(self, other: object, /) -> bool:
-        if not isinstance(other, ActionResponse):
-            return False
-        return (
-            self.tag == other.tag
-            and self.src == other.src
-            and self.dest == other.dest
-            and self.label == other.label
-            and self.action == other.action
-            and self.get_result() == other.get_result()
-            # Custom __eq__ is required because exception instances need
-            # to be compared by type. I.e., Exception() == Exception() is
-            # always False.
-            and type(self.get_exception()) is type(other.get_exception())
-        )
 
-    def __hash__(self) -> int:
-        return hash((type(self), self.tag))
+class SuccessResponse(BaseModel):
+    """Success response message."""
+
+    kind: Literal['success-response'] = Field('success-response', repr=False)
+
+    model_config = DEFAULT_FROZEN_CONFIG
 
 
-class PingRequest(BaseMessage):
-    """Ping request message."""
+Request = Union[ActionRequest, PingRequest, ShutdownRequest]
+Response = Union[ActionResponse, ErrorResponse, SuccessResponse]
+Body = Union[Request, Response]
 
-    kind: Literal['ping-request'] = Field('ping-request', repr=False)
-
-    def response(self) -> PingResponse:
-        """Construct a ping response message."""
-        return PingResponse(
-            tag=self.tag,
-            src=self.dest,
-            dest=self.src,
-            label=self.label,
-            exception=None,
-        )
-
-    def error(self, exception: Exception) -> PingResponse:
-        """Construct an error response to ping request.
-
-        Args:
-            exception: Error of the action.
-        """
-        return PingResponse(
-            tag=self.tag,
-            src=self.dest,
-            dest=self.src,
-            label=self.label,
-            exception=exception,
-        )
+BodyT = TypeVar('BodyT', bound=Body)
+RequestT = TypeVar('RequestT', bound=Request)
+RequestT_co = TypeVar('RequestT_co', bound=Request, covariant=True)
+ResponseT = TypeVar('ResponseT', bound=Response)
+ResponseT_co = TypeVar('ResponseT_co', bound=Response, covariant=True)
 
 
-class PingResponse(BaseMessage):
-    """Ping response message."""
+class Header(BaseModel):
+    """Message metadata header.
 
-    exception: Optional[Exception] = Field(  # noqa: UP045
-        None,
-        description='Exception of the ping, if unsuccessful.',
+    Contains information about the sender, receiver, and message context.
+    """
+
+    src: EntityId = Field(description='Message source ID.')
+    dest: EntityId = Field(description='Message destination ID.')
+    tag: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        description='Unique message tag used to match requests and responses.',
     )
-    kind: Literal['ping-response'] = Field('ping-response', repr=False)
+    label: Optional[uuid.UUID] = Field(  # noqa: UP045
+        None,
+        description=(
+            'Optional label used to disambiguate response messages when '
+            'multiple objects (i.e., handles) share the same mailbox. '
+            'This is a different usage from the `tag`.'
+        ),
+    )
+    kind: Literal['request', 'response']
 
-    @field_serializer('exception', when_used='json')
-    def _pickle_and_encode_obj(self, obj: Any) -> Optional[str]:  # noqa: UP045
-        if obj is None:
-            return None
-        raw = pickle.dumps(obj)
-        return base64.b64encode(raw).decode('utf-8')
+    model_config = DEFAULT_FROZEN_CONFIG
 
-    @field_validator('exception', mode='before')
-    @classmethod
-    def _decode_pickled_obj(cls, obj: Any) -> Any:
-        if not isinstance(obj, str):
-            return obj
-        return pickle.loads(base64.b64decode(obj))
+    def create_response_header(self) -> Self:
+        """Create a response header based on the current request header.
 
-    def __eq__(self, other: object, /) -> bool:
-        if not isinstance(other, PingResponse):
-            return False
-        return (
-            self.tag == other.tag
-            and self.src == other.src
-            and self.dest == other.dest
-            and self.label == other.label
-            # Custom __eq__ is required because exception instances need
-            # to be compared by type. I.e., Exception() == Exception() is
-            # always False.
-            and type(self.exception) is type(other.exception)
-        )
+        Swaps the source and destination, retains the tag and label,
+        and sets the kind to 'response'.
 
-    def __hash__(self) -> int:
-        return hash((type(self), self.tag))
+        Returns:
+            A new header instance with reversed roles.
 
-
-class ShutdownRequest(BaseMessage):
-    """Agent shutdown request message."""
-
-    kind: Literal['shutdown-request'] = Field('shutdown-request', repr=False)
-    terminate: Optional[bool] = None  # noqa: UP045
-
-    @field_validator('dest', mode='after')
-    @classmethod
-    def _validate_agent(cls, dest: EntityId) -> EntityId:
-        if not isinstance(dest, AgentId):
+        Raises:
+            ValueError: If the current header is already a response.
+        """
+        if self.kind == 'response':
             raise ValueError(
-                'Shutdown requests can only be send to an agent. '
-                f'Destination identifier has the {dest.role} role.',
+                'Cannot create response header from another response header',
             )
-        return dest
-
-    def response(self) -> ShutdownResponse:
-        """Construct a shutdown response message."""
-        return ShutdownResponse(
+        return type(self)(
             tag=self.tag,
             src=self.dest,
             dest=self.src,
             label=self.label,
-            exception=None,
-        )
-
-    def error(self, exception: Exception) -> ShutdownResponse:
-        """Construct an error response to shutdown request.
-
-        Args:
-            exception: Error of the action.
-        """
-        return ShutdownResponse(
-            tag=self.tag,
-            src=self.dest,
-            dest=self.src,
-            label=self.label,
-            exception=exception,
+            kind='response',
         )
 
 
-class ShutdownResponse(BaseMessage):
-    """Agent shutdown response message."""
+class Message(BaseModel, Generic[BodyT]):
+    """A complete message with header and body.
 
-    exception: Optional[Exception] = Field(  # noqa: UP045
-        None,
-        description='Exception of the request, if unsuccessful.',
-    )
-    kind: Literal['shutdown-response'] = Field('shutdown-response', repr=False)
+    Wraps a header and a typed request/response body. Supports lazy
+    deserialization of message bodies, metadata access, and convenient
+    construction.
 
-    @field_serializer('exception', when_used='json')
-    def _pickle_and_encode_obj(self, obj: Any) -> Optional[str]:  # noqa: UP045
-        if obj is None:
-            return None
-        raw = pickle.dumps(obj)
-        return base64.b64encode(raw).decode('utf-8')
+    Note:
+        The body value is ignored when testing equality or hashing an instance
+        because the body value could be in either a serialized or
+        deserialized state until
+        [`get_body()`][academy.message.Message.get_body] is called.
+    """
 
-    @field_validator('exception', mode='before')
-    @classmethod
-    def _decode_pickled_obj(cls, obj: Any) -> Any:
-        if not isinstance(obj, str):
-            return obj
-        return pickle.loads(base64.b64decode(obj))
+    header: Header
+    body: SkipValidation[BodyT] = Field(discriminator='kind')
+
+    model_config = DEFAULT_MUTABLE_CONFIG
 
     def __eq__(self, other: object, /) -> bool:
-        if not isinstance(other, ShutdownResponse):
+        if not isinstance(other, Message):
             return False
-        return (
-            self.tag == other.tag
-            and self.src == other.src
-            and self.dest == other.dest
-            # Custom __eq__ is required because exception instances need
-            # to be compared by type. I.e., Exception() == Exception() is
-            # always False.
-            and type(self.exception) is type(other.exception)
-        )
+        # body can be in either serialized or unserialized state so
+        # we ignore it from equality comparisons
+        return self.header == other.header
 
     def __hash__(self) -> int:
-        return hash((type(self), self.tag))
+        return hash((type(self), self.header))
 
+    @property
+    def src(self) -> EntityId:
+        """Message source ID."""
+        return self.header.src
 
-RequestMessage = Union[ActionRequest, PingRequest, ShutdownRequest]
-ResponseMessage = Union[ActionResponse, PingResponse, ShutdownResponse]
-Message = Union[RequestMessage, ResponseMessage]
-"""Message union type for type annotations.
+    @property
+    def dest(self) -> EntityId:
+        """Message destination ID."""
+        return self.header.dest
 
-Tip:
-    This is a parameterized generic type meaning that this type cannot
-    be used for [`isinstance`][`builtins.isinstance`] checks:
-    ```python
-    isinstance(message, Message)  # Fails
-    ```
-    Instead, use [`typing.get_args()`][typing.get_args]:
-    ```
-    from typing import get_args
+    @property
+    def tag(self) -> uuid.UUID:
+        """Message tag."""
+        return self.header.tag
 
-    isinstance(message, get_args(Message))  # Works
-    ```
-"""
+    @property
+    def label(self) -> uuid.UUID | None:
+        """Message label."""
+        return self.header.label
+
+    @classmethod
+    def create(
+        cls,
+        src: EntityId,
+        dest: EntityId,
+        body: BodyT,
+        *,
+        label: uuid.UUID | None = None,
+    ) -> Message[BodyT]:
+        """Create a new message with the specified header and body.
+
+        Args:
+            src: Source entity ID.
+            dest: Destination entity ID.
+            body: Message body.
+            label: Optional label for disambiguation.
+
+        Returns:
+            A new message instance.
+        """
+        if isinstance(body, get_args(Request)):
+            kind = 'request'
+        elif isinstance(body, get_args(Response)):
+            kind = 'response'
+        else:
+            raise AssertionError('Unreachable.')
+        header = Header(src=src, dest=dest, label=label, kind=kind)
+        request: Message[BodyT] = Message(header=header, body=body)
+        return request
+
+    def create_response(self, body: ResponseT) -> Message[ResponseT]:
+        """Create a response message from this request message.
+
+        Args:
+            body: Response message body.
+
+        Returns:
+            A new response message instance.
+
+        Raises:
+            ValueError: If this message is already a response.
+        """
+        header = self.header.create_response_header()
+        response: Message[ResponseT] = Message(header=header, body=body)
+        return response
+
+    def get_body(self) -> BodyT:
+        """Return the message body, deserializing if needed.
+
+        Lazily deserializes and returns the body object.
+        Caches the body to avoid redundant decoding.
+
+        Returns:
+            The deserialized body.
+        """
+        if isinstance(self.body, get_args(Body)):
+            return self.body
+
+        adapter: TypeAdapter[BodyT] = TypeAdapter(Body)
+        body = (
+            adapter.validate_json(self.body)
+            if isinstance(self.body, str)
+            else adapter.validate_python(self.body)
+        )
+        self.body = body
+        return self.body
+
+    def is_request(self) -> bool:
+        """Check if the message is a request."""
+        return self.header.kind == 'request'
+
+    def is_response(self) -> bool:
+        """Check if the message is a response."""
+        return self.header.kind == 'response'
+
+    @classmethod
+    def model_deserialize(cls, data: bytes) -> Message[BodyT]:
+        """Deserialize a message from bytes using pickle.
+
+        Warning:
+            This uses pickle and is therefore susceptible to all the
+            typical pickle warnings about code injection.
+
+        Args:
+            data: The serialized message as bytes.
+
+        Returns:
+            The deserialized message instance.
+
+        Raises:
+            TypeError: If the deserialized object is not a Message.
+        """
+        message = pickle.loads(data)
+        if not isinstance(message, cls):
+            raise TypeError(
+                'Deserialized message is not of type Message.',
+            )
+        return message
+
+    def model_serialize(self) -> bytes:
+        """Serialize the message to bytes using pickle.
+
+        Warning:
+            This uses pickle and is therefore susceptible to all the
+            typical pickle warnings about code injection.
+
+        Returns:
+            The serialized message as bytes.
+        """
+        return pickle.dumps(self)

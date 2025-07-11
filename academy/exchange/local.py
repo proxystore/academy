@@ -45,7 +45,7 @@ class _LocalExchangeState(NoPickleMixin):
     """
 
     def __init__(self) -> None:
-        self.queues: dict[EntityId, AsyncQueue[Message]] = {}
+        self.queues: dict[EntityId, AsyncQueue[Message[Any]]] = {}
         self.locks: dict[EntityId, Lock] = {}
         self.agents: dict[AgentId[Any], type[Agent]] = {}
 
@@ -124,7 +124,7 @@ class LocalExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
     def factory(self) -> LocalExchangeFactory:
         return LocalExchangeFactory(_state=self._state)
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         queue = self._state.queues[self.mailbox_id]
         try:
             return await asyncio.wait_for(queue.get(), timeout=timeout)
@@ -148,7 +148,7 @@ class LocalExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         self._state.agents[aid] = agent
         return LocalAgentRegistration(agent_id=aid)
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         queue = self._state.queues.get(message.dest, None)
         if queue is None:
             raise BadEntityIdError(message.dest)
@@ -214,8 +214,8 @@ class LocalExchangeFactory(
         )
 
 
-async def _drain_queue(queue: AsyncQueue[Message]) -> list[Message]:
-    items: list[Message] = []
+async def _drain_queue(queue: AsyncQueue[Message[Any]]) -> list[Message[Any]]:
+    items: list[Message[Any]] = []
 
     while True:
         try:

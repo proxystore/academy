@@ -16,6 +16,7 @@ from academy.handle import ProxyHandle
 from academy.handle import RemoteHandle
 from academy.handle import UnboundRemoteHandle
 from academy.manager import Manager
+from academy.message import Message
 from academy.message import PingRequest
 from testing.agents import CounterAgent
 from testing.agents import EmptyAgent
@@ -219,7 +220,11 @@ async def test_client_remote_handle_log_bad_response(
     #     error produced by user) with no corresponding handle to
     #     send the response to.
     await handle.exchange.send(
-        PingRequest(src=handle.agent_id, dest=handle.client_id),
+        Message.create(
+            src=handle.agent_id,
+            dest=handle.client_id,
+            body=PingRequest(),
+        ),
     )
     assert await handle.ping() > 0
     await handle.shutdown()

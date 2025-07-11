@@ -11,7 +11,6 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 from typing import Generic
-from typing import get_args
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     from typing import Self
@@ -45,7 +44,6 @@ from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.identifier import UserId
-from academy.message import BaseMessage
 from academy.message import Message
 from academy.serialize import NoPickleMixin
 from academy.socket import address_by_hostname
@@ -96,9 +94,9 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
 
         self._address_cache: dict[EntityId, str] = {}
         if sys.version_info >= (3, 13):  # pragma: >=3.13 cover
-            self._messages: AsyncQueue[Message] = Queue()
+            self._messages: AsyncQueue[Message[Any]] = Queue()
         else:  # pragma: <3.13 cover
-            self._messages: AsyncQueue[Message] = Queue().async_q
+            self._messages: AsyncQueue[Message[Any]] = Queue().async_q
         self._socket_pool = SocketPool()
         self._started = asyncio.Event()
         self._shutdown = asyncio.Event()
@@ -255,7 +253,7 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             namespace=self._namespace,
         )
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         try:
             return await asyncio.wait_for(
                 self._messages.get(),
@@ -286,7 +284,7 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         )
         return HybridAgentRegistration(agent_id=aid)
 
-    async def _send_direct(self, address: str, message: Message) -> None:
+    async def _send_direct(self, address: str, message: Message[Any]) -> None:
         await self._socket_pool.send(address, message.model_serialize())
         logger.debug(
             'Sent %s to %s via p2p at %s',
@@ -295,7 +293,7 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             address,
         )
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         address = self._address_cache.get(message.dest, None)
         if address is not None:
             try:
@@ -370,7 +368,9 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         # This assumes that only one entity is reading from the mailbox.
         await self._redis_client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)  # type: ignore[misc]
 
-        messages = [BaseMessage.model_deserialize(raw) for raw in pending]
+        messages: list[Message[Any]] = [
+            Message.model_deserialize(raw) for raw in pending
+        ]
         await _respond_pending_requests_on_terminate(messages, self)
 
         if isinstance(uid, AgentId):
@@ -390,8 +390,7 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             self._shutdown.set()
             self._messages.shutdown(immediate=True)
             raise MailboxTerminatedError(self.mailbox_id)
-        message = BaseMessage.model_deserialize(raw[1])
-        assert isinstance(message, get_args(Message))
+        message: Message[Any] = Message.model_deserialize(raw[1])
         logger.debug(
             'Received %s to %s via redis',
             type(message).__name__,
@@ -433,7 +432,7 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             )
 
     async def _direct_message_handler(self, payload: bytes) -> bytes | None:
-        message = BaseMessage.model_deserialize(payload)
+        message: Message[Any] = Message.model_deserialize(payload)
         logger.debug(
             'Received %s to %s via p2p',
             type(message).__name__,

@@ -492,7 +492,7 @@ class Manager(Generic[ExchangeTransportT], NoPickleMixin):
             blocking: Wait for the agent to exit before returning.
             raise_error: Raise the error returned by the agent if
                 `blocking=True`.
-            terminate: Override the termination agent of the agent defined
+            terminate: Override the termination behavior of the agent defined
                 in the [`RuntimeConfig`][academy.runtime.RuntimeConfig].
             timeout: Optional timeout is seconds when `blocking=True`.
 

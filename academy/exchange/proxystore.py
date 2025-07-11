@@ -113,20 +113,21 @@ class ProxyStoreExchangeTransport(
             resolve_async=self.resolve_async,
         )
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         message = await self.transport.recv(timeout)
-        if self.resolve_async and isinstance(message, ActionRequest):
-            args = message.get_args()
-            kwargs = message.get_kwargs()
+        body = message.get_body()
+        if self.resolve_async and isinstance(body, ActionRequest):
+            args = body.get_args()
+            kwargs = body.get_kwargs()
             for arg in (*args, *kwargs.values()):
                 if type(arg) is Proxy:
                     resolve_async(arg)
         elif (
             self.resolve_async
-            and isinstance(message, ActionResponse)
-            and type(message.get_result()) is Proxy
+            and isinstance(body, ActionResponse)
+            and type(body.get_result()) is Proxy
         ):
-            resolve_async(message.get_result())
+            resolve_async(body.get_result())
         return message
 
     async def register_agent(
@@ -137,21 +138,22 @@ class ProxyStoreExchangeTransport(
     ) -> AgentRegistration[AgentT]:
         return await self.transport.register_agent(agent, name=name)
 
-    async def send(self, message: Message) -> None:
-        if isinstance(message, ActionRequest):
-            message.pargs = _proxy_iterable(
-                message.get_args(),
+    async def send(self, message: Message[Any]) -> None:
+        body = message.get_body()
+        if isinstance(body, ActionRequest):
+            body.pargs = _proxy_iterable(
+                body.get_args(),
                 self.store,
                 self.should_proxy,
             )
-            message.kargs = _proxy_mapping(
-                message.get_kwargs(),
+            body.kargs = _proxy_mapping(
+                body.get_kwargs(),
                 self.store,
                 self.should_proxy,
             )
-        if isinstance(message, ActionResponse) and message.result is not None:
-            message.result = _proxy_item(
-                message.result,
+        elif isinstance(body, ActionResponse):
+            body.result = _proxy_item(
+                body.result,
                 self.store,
                 self.should_proxy,
             )

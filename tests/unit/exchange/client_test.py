@@ -15,9 +15,11 @@ from academy.exchange import UserExchangeClient
 from academy.handle import RemoteHandle
 from academy.identifier import AgentId
 from academy.identifier import UserId
+from academy.message import ErrorResponse
+from academy.message import Message
 from academy.message import PingRequest
-from academy.message import PingResponse
-from academy.message import RequestMessage
+from academy.message import Request
+from academy.message import SuccessResponse
 from testing.agents import EmptyAgent
 from testing.constant import TEST_WAIT_TIMEOUT
 from testing.fixture import EXCHANGE_FACTORY_TYPES
@@ -127,7 +129,7 @@ async def test_client_get_status(client: UserExchangeClient[Any]) -> None:
 async def test_client_to_agent_message(factory: ExchangeFactory[Any]) -> None:
     received = asyncio.Event()
 
-    async def _handler(_: RequestMessage) -> None:
+    async def _handler(_: Message[Request]) -> None:
         received.set()
 
     async with await factory.create_user_client(
@@ -140,9 +142,10 @@ async def test_client_to_agent_message(factory: ExchangeFactory[Any]) -> None:
         ) as agent_client:
             task = asyncio.Task(agent_client._listen_for_messages())
 
-            message = PingRequest(
+            message = Message.create(
                 src=user_client.client_id,
                 dest=agent_client.client_id,
+                body=PingRequest(),
             )
             await user_client.send(message)
 
@@ -156,7 +159,7 @@ async def test_client_to_agent_message(factory: ExchangeFactory[Any]) -> None:
 async def test_agent_handle_process_response(
     factory: ExchangeFactory[Any],
 ) -> None:
-    async def _handler(_: RequestMessage) -> None:  # pragma: no cover
+    async def _handler(_: Message[Request]) -> None:  # pragma: no cover
         pass
 
     async with await factory.create_user_client(
@@ -171,9 +174,10 @@ async def test_agent_handle_process_response(
                 AgentId.new(),
             )
 
-            message = PingResponse(
+            message = Message.create(
                 src=user_client.client_id,
                 dest=agent_client.client_id,
+                body=SuccessResponse(),
                 label=handle.handle_id,
             )
 
@@ -193,11 +197,13 @@ async def test_client_reply_error_on_request(
         async with await factory.create_user_client(
             start_listener=True,
         ) as client2:
-            message = PingRequest(
+            message = Message.create(
                 src=client1.client_id,
                 dest=client2.client_id,
+                body=PingRequest(),
             )
             await client1.send(message)
             response = await client1._transport.recv()
-            assert isinstance(response, PingResponse)
-            assert isinstance(response.exception, TypeError)
+            body = response.get_body()
+            assert isinstance(body, ErrorResponse)
+            assert isinstance(body.get_exception(), TypeError)

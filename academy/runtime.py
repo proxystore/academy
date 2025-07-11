@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import logging
 import sys
+import uuid
 from collections.abc import Awaitable
 from types import TracebackType
 from typing import Any
@@ -36,10 +37,15 @@ from academy.handle import RemoteHandle
 from academy.handle import UnboundRemoteHandle
 from academy.identifier import EntityId
 from academy.message import ActionRequest
+from academy.message import ActionResponse
+from academy.message import ErrorResponse
+from academy.message import Message
 from academy.message import PingRequest
-from academy.message import RequestMessage
-from academy.message import ResponseMessage
+from academy.message import Request
+from academy.message import Response
+from academy.message import ResponseT_co
 from academy.message import ShutdownRequest
+from academy.message import SuccessResponse
 from academy.serialize import NoPickleMixin
 
 logger = logging.getLogger(__name__)
@@ -135,7 +141,7 @@ class Runtime(Generic[AgentT], NoPickleMixin):
         self._shutdown_options = _ShutdownState()
         self._agent_startup_called = False
 
-        self._action_tasks: dict[ActionRequest, asyncio.Task[None]] = {}
+        self._action_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._loop_tasks: dict[str, asyncio.Task[None]] = {}
         self._loop_exceptions: list[tuple[str, Exception]] = []
 
@@ -170,7 +176,7 @@ class Runtime(Generic[AgentT], NoPickleMixin):
         agent = type(self.agent).__name__
         return f'{name}<{agent}; {self.agent_id}>'
 
-    async def _send_response(self, response: ResponseMessage) -> None:
+    async def _send_response(self, response: Message[ResponseT_co]) -> None:
         assert self._exchange_client is not None
         try:
             await self._exchange_client.send(response)
@@ -188,21 +194,26 @@ class Runtime(Generic[AgentT], NoPickleMixin):
                 response.dest,
             )
 
-    async def _execute_action(self, request: ActionRequest) -> None:
+    async def _execute_action(self, request: Message[ActionRequest]) -> None:
+        body = request.get_body()
+        response: Message[Response]
         try:
             result = await self.action(
-                request.action,
+                body.action,
                 request.src,
-                args=request.get_args(),
-                kwargs=request.get_kwargs(),
+                args=body.get_args(),
+                kwargs=body.get_kwargs(),
             )
         except asyncio.CancelledError:
-            exception = ActionCancelledError(request.action)
-            response = request.error(exception=exception)
+            response = request.create_response(
+                ErrorResponse(exception=ActionCancelledError(body.action)),
+            )
         except Exception as e:
-            response = request.error(exception=e)
+            response = request.create_response(ErrorResponse(exception=e))
         else:
-            response = request.response(result=result)
+            response = request.create_response(
+                ActionResponse(action=body.action, result=result),
+            )
         finally:
             # Shield sending the result from being cancelled so the requester
             # does not block on a response they will never get.
@@ -227,21 +238,23 @@ class Runtime(Generic[AgentT], NoPickleMixin):
             if self.config.shutdown_on_loop_error:
                 self.signal_shutdown(expected=False)
 
-    async def _request_handler(self, request: RequestMessage) -> None:
-        if isinstance(request, ActionRequest):
+    async def _request_handler(self, request: Message[Request]) -> None:
+        body = request.get_body()
+        if isinstance(body, ActionRequest):
             task = asyncio.create_task(
-                self._execute_action(request),
-                name=f'execute-action-{request.action}-{request.tag}',
+                self._execute_action(request),  # type: ignore[arg-type]
+                name=f'execute-action-{body.action}-{request.tag}',
             )
-            self._action_tasks[request] = task
+            self._action_tasks[request.tag] = task
             task.add_done_callback(
-                lambda _: self._action_tasks.pop(request),
+                lambda _: self._action_tasks.pop(request.tag),
             )
-        elif isinstance(request, PingRequest):
+        elif isinstance(body, PingRequest):
             logger.info('Ping request received by %s', self.agent_id)
-            await self._send_response(request.response())
-        elif isinstance(request, ShutdownRequest):
-            self.signal_shutdown(expected=True, terminate=request.terminate)
+            response = request.create_response(SuccessResponse())
+            await self._send_response(response)
+        elif isinstance(body, ShutdownRequest):
+            self.signal_shutdown(expected=True, terminate=body.terminate)
         else:
             raise AssertionError('Unreachable.')
 

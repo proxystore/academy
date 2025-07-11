@@ -31,7 +31,6 @@ from collections.abc import Awaitable
 from collections.abc import Sequence
 from typing import Any
 from typing import Callable
-from typing import get_args
 
 if sys.version_info >= (3, 13):  # pragma: >=3.13 cover
     from asyncio import Queue
@@ -69,9 +68,8 @@ from academy.exchange.cloud.exceptions import UnauthorizedError
 from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.logging import init_logging
-from academy.message import BaseMessage
+from academy.message import ErrorResponse
 from academy.message import Message
-from academy.message import RequestMessage
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +90,7 @@ class StatusCode(enum.Enum):
 class _MailboxManager:
     def __init__(self) -> None:
         self._owners: dict[EntityId, str | None] = {}
-        self._mailboxes: dict[EntityId, AsyncQueue[Message]] = {}
+        self._mailboxes: dict[EntityId, AsyncQueue[Message[Any]]] = {}
         self._terminated: set[EntityId] = set()
         self._agents: dict[AgentId[Any], tuple[str, ...]] = {}
         self._locks: dict[EntityId, asyncio.Lock] = {}
@@ -136,9 +134,9 @@ class _MailboxManager:
         mailbox = self._mailboxes.get(uid, None)
         if mailbox is None:
             if sys.version_info >= (3, 13):  # pragma: >=3.13 cover
-                queue: AsyncQueue[Message] = Queue()
+                queue: AsyncQueue[Message[Any]] = Queue()
             else:  # pragma: <3.13 cover
-                queue: AsyncQueue[Message] = Queue().async_q
+                queue: AsyncQueue[Message[Any]] = Queue().async_q
             self._mailboxes[uid] = queue
             self._terminated.discard(uid)
             self._owners[uid] = client
@@ -161,9 +159,10 @@ class _MailboxManager:
         async with self._locks[uid]:
             messages = await _drain_queue(mailbox)
             for message in messages:
-                if isinstance(message, get_args(RequestMessage)):
+                if message.is_request():
                     error = MailboxTerminatedError(uid)
-                    response = message.error(error)
+                    body = ErrorResponse(exception=error)
+                    response = message.create_response(body)
                     with contextlib.suppress(Exception):
                         await self.put(client, response)
 
@@ -192,7 +191,7 @@ class _MailboxManager:
         uid: EntityId,
         *,
         timeout: float | None = None,
-    ) -> Message:
+    ) -> Message[Any]:
         if not self.has_permissions(client, uid):
             raise ForbiddenError(
                 'Client does not have correct permissions.',
@@ -207,7 +206,7 @@ class _MailboxManager:
         except QueueShutDown:
             raise MailboxTerminatedError(uid) from None
 
-    async def put(self, client: str | None, message: Message) -> None:
+    async def put(self, client: str | None, message: Message[Any]) -> None:
         if not self.has_permissions(client, message.dest):
             raise ForbiddenError(
                 'Client does not have correct permissions.',
@@ -225,8 +224,8 @@ class _MailboxManager:
                 raise MailboxTerminatedError(message.dest) from None
 
 
-async def _drain_queue(queue: AsyncQueue[Message]) -> list[Message]:
-    items: list[Message] = []
+async def _drain_queue(queue: AsyncQueue[Message[Any]]) -> list[Message[Any]]:
+    items: list[Message[Any]] = []
 
     while True:
         try:
@@ -354,7 +353,7 @@ async def _send_message_route(request: Request) -> Response:
 
     try:
         raw_message = data.get('message')
-        message = BaseMessage.model_from_json(raw_message)
+        message: Message[Any] = Message.model_validate_json(raw_message)
     except (KeyError, ValidationError):
         return Response(
             status=StatusCode.BAD_REQUEST.value,

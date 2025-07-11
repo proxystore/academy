@@ -25,9 +25,11 @@ from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.message import ActionRequest
 from academy.message import ActionResponse
+from academy.message import ErrorResponse
+from academy.message import Message
 from academy.message import PingRequest
-from academy.message import PingResponse
 from academy.message import ShutdownRequest
+from academy.message import SuccessResponse
 from academy.runtime import _bind_agent_handles
 from academy.runtime import Runtime
 from academy.runtime import RuntimeConfig
@@ -276,9 +278,10 @@ async def test_runtime_shutdown_message(
         exchange_factory=exchange_client.factory(),
         registration=registration,
     ) as runtime:
-        shutdown = ShutdownRequest(
+        shutdown = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
+            body=ShutdownRequest(),
         )
         await exchange_client.send(shutdown)
         await runtime.wait_shutdown(timeout=TEST_WAIT_TIMEOUT)
@@ -297,13 +300,14 @@ async def test_runtime_ping_message(
         exchange_factory=exchange_client.factory(),
         registration=registration,
     ) as runtime:
-        ping = PingRequest(
+        ping = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
+            body=PingRequest(),
         )
         await exchange_client.send(ping)
         message = await exchange_client._transport.recv()
-        assert isinstance(message, PingResponse)
+        assert isinstance(message.get_body(), SuccessResponse)
 
 
 @pytest.mark.asyncio
@@ -320,28 +324,27 @@ async def test_runtime_action_message(
         registration=registration,
     ) as runtime:
         value = 42
-        request = ActionRequest(
+        request = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
-            action='add',
-            pargs=(value,),
+            body=ActionRequest(action='add', pargs=(value,)),
         )
         await exchange_client.send(request)
         message = await exchange_client._transport.recv()
-        assert isinstance(message, ActionResponse)
-        assert message.get_exception() is None
-        assert message.get_result() is None
+        body = message.get_body()
+        assert isinstance(body, ActionResponse)
+        assert body.get_result() is None
 
-        request = ActionRequest(
+        request = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
-            action='count',
+            body=ActionRequest(action='count'),
         )
         await exchange_client.send(request)
         message = await exchange_client._transport.recv()
-        assert isinstance(message, ActionResponse)
-        assert message.get_exception() is None
-        assert message.get_result() == value
+        body = message.get_body()
+        assert isinstance(body, ActionResponse)
+        assert body.get_result() == value
 
 
 @pytest.mark.parametrize('cancel', (True, False))
@@ -371,25 +374,28 @@ async def test_runtime_cancel_action_requests_on_shutdown(
     )
     await runtime._started_event.wait()
 
-    request = ActionRequest(
+    request = Message.create(
         src=exchange_client.client_id,
         dest=runtime.agent_id,
-        action='sleep',
+        body=ActionRequest(action='sleep'),
     )
     await exchange_client.send(request)
 
-    shutdown = ShutdownRequest(
+    shutdown = Message.create(
         src=exchange_client.client_id,
         dest=runtime.agent_id,
+        body=ShutdownRequest(),
     )
     await exchange_client.send(shutdown)
 
     message = await exchange_client._transport.recv()
-    assert isinstance(message, ActionResponse)
+    body = message.get_body()
     if cancel:
-        assert isinstance(message.get_exception(), ActionCancelledError)
+        assert isinstance(body, ErrorResponse)
+        assert isinstance(body.get_exception(), ActionCancelledError)
     else:
-        assert message.get_exception() is None
+        assert isinstance(body, ActionResponse)
+        assert body.get_result() is None
 
     await asyncio.wait_for(task, timeout=TEST_WAIT_TIMEOUT)
 
@@ -407,16 +413,18 @@ async def test_runtime_action_message_error(
         exchange_factory=exchange_client.factory(),
         registration=registration,
     ) as runtime:
-        request = ActionRequest(
+        request = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
-            action='fails',
+            body=ActionRequest(action='fails'),
         )
         await exchange_client.send(request)
         message = await exchange_client._transport.recv()
-        assert isinstance(message, ActionResponse)
-        assert isinstance(message.get_exception(), RuntimeError)
-        assert 'This action always fails.' in str(message.get_exception())
+        body = message.get_body()
+        assert isinstance(body, ErrorResponse)
+        exception = body.get_exception()
+        assert isinstance(exception, RuntimeError)
+        assert 'This action always fails.' in str(exception)
 
 
 @pytest.mark.asyncio
@@ -432,16 +440,18 @@ async def test_runtime_action_message_unknown(
         exchange_factory=exchange_client.factory(),
         registration=registration,
     ) as runtime:
-        request = ActionRequest(
+        request = Message.create(
             src=exchange_client.client_id,
             dest=runtime.agent_id,
-            action='null',
+            body=ActionRequest(action='null'),
         )
         await exchange_client.send(request)
         message = await exchange_client._transport.recv()
-        assert isinstance(message, ActionResponse)
-        assert isinstance(message.get_exception(), AttributeError)
-        assert 'null' in str(message.get_exception())
+        body = message.get_body()
+        assert isinstance(body, ErrorResponse)
+        exception = body.get_exception()
+        assert isinstance(exception, AttributeError)
+        assert 'null' in str(exception)
 
 
 @pytest.mark.asyncio

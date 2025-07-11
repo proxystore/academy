@@ -12,6 +12,7 @@ from academy.exchange.hybrid import HybridExchangeFactory
 from academy.exchange.hybrid import HybridExchangeTransport
 from academy.exchange.hybrid import uuid_to_base32
 from academy.identifier import UserId
+from academy.message import Message
 from academy.message import PingRequest
 from academy.socket import open_port
 from testing.agents import EmptyAgent
@@ -51,9 +52,10 @@ async def test_send_to_mailbox_direct(
     factory = hybrid_exchange_factory
     async with await factory._create_transport() as transport1:
         async with await factory._create_transport() as transport2:
-            message = PingRequest(
+            message = Message.create(
                 src=transport1.mailbox_id,
                 dest=transport2.mailbox_id,
+                body=PingRequest(),
             )
             for _ in range(3):
                 await transport1.send(message)
@@ -71,7 +73,11 @@ async def test_send_to_mailbox_indirect(
     messages = 3
     async with await factory._create_transport() as transport1:
         aid = (await transport1.register_agent(EmptyAgent)).agent_id
-        message = PingRequest(src=transport1.mailbox_id, dest=aid)
+        message = Message.create(
+            src=transport1.mailbox_id,
+            dest=aid,
+            body=PingRequest(),
+        )
         for _ in range(messages):
             await transport1.send(message)
 
@@ -118,9 +124,10 @@ async def test_send_to_mailbox_bad_cached_address(
         async with await factory1._create_transport(
             mailbox_id=aid,
         ) as transport2:
-            message = PingRequest(
+            message = Message.create(
                 src=transport1.mailbox_id,
                 dest=transport2.mailbox_id,
+                body=PingRequest(),
             )
             await transport1.send(message)
             received = await transport2.recv(timeout=TEST_CONNECTION_TIMEOUT)

@@ -8,7 +8,6 @@ import sys
 import uuid
 from typing import Any
 from typing import Generic
-from typing import get_args
 from typing import NamedTuple
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
@@ -29,7 +28,6 @@ from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.identifier import UserId
-from academy.message import BaseMessage
 from academy.message import Message
 from academy.serialize import NoPickleMixin
 
@@ -161,7 +159,7 @@ class RedisExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             **self._redis_info.kwargs,
         )
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         _timeout = timeout if timeout is not None else 0
         status = await self._client.get(
             self._active_key(self.mailbox_id),
@@ -190,9 +188,7 @@ class RedisExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         assert len(raw) == 2  # noqa: PLR2004
         if raw[1] == _CLOSE_SENTINEL:  # pragma: no cover
             raise MailboxTerminatedError(self.mailbox_id)
-        message = BaseMessage.model_deserialize(raw[1])
-        assert isinstance(message, get_args(Message))
-        return message
+        return Message.model_deserialize(raw[1])
 
     async def register_agent(
         self,
@@ -211,7 +207,7 @@ class RedisExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         )
         return RedisAgentRegistration(agent_id=aid)
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         status = await self._client.get(self._active_key(message.dest))
         if status is None:
             raise BadEntityIdError(message.dest)
@@ -247,7 +243,9 @@ class RedisExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         if isinstance(uid, AgentId):
             await self._client.delete(self._agent_key(uid))
 
-        messages = [BaseMessage.model_deserialize(raw) for raw in pending]
+        messages: list[Message[Any]] = [
+            Message.model_deserialize(raw) for raw in pending
+        ]
         await _respond_pending_requests_on_terminate(messages, self)
 
 

@@ -12,7 +12,6 @@ from types import TracebackType
 from typing import Any
 from typing import Callable
 from typing import Generic
-from typing import get_args
 from typing import Protocol
 from typing import runtime_checkable
 from typing import TypeVar
@@ -39,9 +38,9 @@ from academy.handle import UnboundRemoteHandle
 from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.identifier import UserId
+from academy.message import ErrorResponse
 from academy.message import Message
-from academy.message import RequestMessage
-from academy.message import ResponseMessage
+from academy.message import RequestT_co
 
 __all__ = [
     'AgentExchangeClient',
@@ -51,8 +50,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
 RequestHandler: TypeAlias = Callable[
-    [RequestMessage],
+    [Message[RequestT_co]],
     Coroutine[None, None, None],
 ]
 
@@ -83,7 +83,7 @@ class ExchangeFactory(abc.ABC, Generic[ExchangeTransportT]):
     async def create_agent_client(
         self,
         registration: AgentRegistration[AgentT],
-        request_handler: RequestHandler,
+        request_handler: RequestHandler[RequestT_co],
     ) -> AgentExchangeClient[AgentT, ExchangeTransportT]:
         """Create a new agent exchange client.
 
@@ -278,7 +278,7 @@ class ExchangeClient(abc.ABC, Generic[ExchangeTransportT]):
         logger.info('Registered %s in exchange', registration.agent_id)
         return registration
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         """Send a message to a mailbox.
 
         Args:
@@ -328,7 +328,7 @@ class ExchangeClient(abc.ABC, Generic[ExchangeTransportT]):
             await self._handle_message(message)
 
     @abc.abstractmethod
-    async def _handle_message(self, message: Message) -> None: ...
+    async def _handle_message(self, message: Message[Any]) -> None: ...
 
 
 class AgentExchangeClient(
@@ -353,7 +353,7 @@ class AgentExchangeClient(
         self,
         agent_id: AgentId[AgentT],
         transport: ExchangeTransportT,
-        request_handler: RequestHandler,
+        request_handler: RequestHandler[RequestT_co],
     ) -> None:
         super().__init__(transport)
         self._agent_id = agent_id
@@ -380,21 +380,20 @@ class AgentExchangeClient(
             self._closed = True
             logger.info('Closed exchange client for %s', self.client_id)
 
-    async def _handle_message(self, message: Message) -> None:
-        if isinstance(message, get_args(RequestMessage)):
+    async def _handle_message(self, message: Message[Any]) -> None:
+        if message.is_request():
             await self._request_handler(message)
-        elif isinstance(message, get_args(ResponseMessage)):
-            try:
-                handle = self._handles[message.label]
-            except KeyError:
+        elif message.is_response():
+            if message.label is None or message.label not in self._handles:
                 logger.warning(
                     'Exchange client for %s received an unexpected response '
                     'message from %s but no corresponding handle exists.',
                     self.client_id,
                     message.src,
                 )
-            else:
-                await handle._process_response(message)
+                return
+            handle = self._handles[message.label]
+            await handle._process_response(message)
         else:
             raise AssertionError('Unreachable.')
 
@@ -451,10 +450,10 @@ class UserExchangeClient(ExchangeClient[ExchangeTransportT]):
             self._closed = True
             logger.info('Closed exchange client for %s', self.client_id)
 
-    async def _handle_message(self, message: Message) -> None:
-        if isinstance(message, get_args(RequestMessage)):
+    async def _handle_message(self, message: Message[Any]) -> None:
+        if message.is_request():
             error = TypeError(f'{self.client_id} cannot fulfill requests.')
-            response = message.error(error)
+            response = message.create_response(ErrorResponse(exception=error))
             await self._transport.send(response)
             logger.warning(
                 'Exchange client for %s received unexpected request message '
@@ -462,18 +461,19 @@ class UserExchangeClient(ExchangeClient[ExchangeTransportT]):
                 self.client_id,
                 message.src,
             )
-        elif isinstance(message, get_args(ResponseMessage)):
-            try:
-                handle = self._handles[message.label]
-            except KeyError:  # pragma: no cover
+        elif message.is_response():
+            if (
+                message.label is None or message.label not in self._handles
+            ):  # pragma: no cover
                 logger.warning(
                     'Exchange client for %s received an unexpected response '
                     'message from %s but no corresponding handle exists.',
                     self.client_id,
                     message.src,
                 )
-            else:
-                await handle._process_response(message)
+                return
+            handle = self._handles[message.label]
+            await handle._process_response(message)
         else:
             raise AssertionError('Unreachable.')
 

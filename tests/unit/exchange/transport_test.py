@@ -17,8 +17,10 @@ from academy.exchange.transport import AgentRegistrationT
 from academy.exchange.transport import ExchangeTransport
 from academy.identifier import AgentId
 from academy.identifier import UserId
+from academy.message import ErrorResponse
+from academy.message import Message
 from academy.message import PingRequest
-from academy.message import PingResponse
+from academy.message import SuccessResponse
 from testing.agents import EmptyAgent
 from testing.constant import TEST_SLEEP_INTERVAL
 from testing.fixture import EXCHANGE_FACTORY_TYPES
@@ -80,9 +82,10 @@ async def test_transport_send_recv(
     transport: ExchangeTransport[AgentRegistrationT],
 ) -> None:
     for _ in range(3):
-        message = PingRequest(
+        message = Message.create(
             src=transport.mailbox_id,
             dest=transport.mailbox_id,
+            body=PingRequest(),
         )
         await transport.send(message)
         assert await transport.recv() == message
@@ -94,7 +97,13 @@ async def test_transport_send_bad_identifier_error(
 ) -> None:
     uid: AgentId[Any] = AgentId.new()
     with pytest.raises(BadEntityIdError):
-        await transport.send(PingRequest(src=transport.mailbox_id, dest=uid))
+        await transport.send(
+            Message.create(
+                src=transport.mailbox_id,
+                dest=uid,
+                body=PingRequest(),
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -105,7 +114,11 @@ async def test_transport_send_mailbox_closed(
     await transport.terminate(registration.agent_id)
     with pytest.raises(MailboxTerminatedError):
         await transport.send(
-            PingRequest(src=transport.mailbox_id, dest=registration.agent_id),
+            Message.create(
+                src=transport.mailbox_id,
+                dest=registration.agent_id,
+                body=PingRequest(),
+            ),
         )
 
 
@@ -147,13 +160,15 @@ async def test_transport_terminate_reply_pending_requests(
     async with await factory._create_transport() as transport1:
         async with await factory._create_transport() as transport2:
             # Put a request and a response message in transport2 mailbox
-            message1 = PingRequest(
+            message1 = Message.create(
                 src=transport1.mailbox_id,
                 dest=transport2.mailbox_id,
+                body=PingRequest(),
             )
-            message2 = PingResponse(
+            message2 = Message.create(
                 src=transport1.mailbox_id,
                 dest=transport2.mailbox_id,
+                body=SuccessResponse(),
             )
             await transport1.send(message1)
             await transport1.send(message2)
@@ -165,9 +180,10 @@ async def test_transport_terminate_reply_pending_requests(
             # Check that transport1 gets a response to its request that
             # was terminated.
             response = await transport1.recv()
-            assert isinstance(response, PingResponse)
+            body = response.get_body()
+            assert isinstance(body, ErrorResponse)
             assert response.tag == message1.tag
-            assert isinstance(response.exception, MailboxTerminatedError)
+            assert isinstance(body.get_exception(), MailboxTerminatedError)
 
             # No other messages should have been received
             with pytest.raises(TimeoutError):

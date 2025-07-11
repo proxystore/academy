@@ -31,6 +31,7 @@ from academy.exchange.cloud.server import create_app
 from academy.exchange.cloud.server import StatusCode
 from academy.identifier import AgentId
 from academy.identifier import UserId
+from academy.message import Message
 from academy.message import PingRequest
 from academy.socket import open_port
 from testing.constant import TEST_SLEEP_INTERVAL
@@ -146,7 +147,7 @@ async def test_mailbox_manager_send_recv() -> None:
     uid = UserId.new()
     manager.create_mailbox(user_id, uid)
 
-    message = PingRequest(src=uid, dest=uid)
+    message = Message.create(src=uid, dest=uid, body=PingRequest())
     with pytest.raises(ForbiddenError):
         await manager.put(bad_user, message)
     await manager.put(user_id, message)
@@ -162,7 +163,7 @@ async def test_mailbox_manager_send_recv() -> None:
 async def test_mailbox_manager_bad_identifier() -> None:
     manager = _MailboxManager()
     uid = UserId.new()
-    message = PingRequest(src=uid, dest=uid)
+    message = Message.create(src=uid, dest=uid, body=PingRequest())
 
     with pytest.raises(BadEntityIdError):
         await manager.get(None, uid)
@@ -177,7 +178,7 @@ async def test_mailbox_manager_mailbox_closed() -> None:
     uid = UserId.new()
     manager.create_mailbox(None, uid)
     await manager.terminate(None, uid)
-    message = PingRequest(src=uid, dest=uid)
+    message = Message.create(src=uid, dest=uid, body=PingRequest())
 
     with pytest.raises(MailboxTerminatedError):
         await manager.get(None, uid)
@@ -402,7 +403,7 @@ async def test_globus_auth_client_create_discover_close(auth_client) -> None:
 async def test_globus_auth_client_message(auth_client) -> None:
     aid: AgentId[Any] = AgentId.new(name='test')
     cid = UserId.new()
-    message = PingRequest(src=cid, dest=aid)
+    message = Message.create(src=cid, dest=aid, body=PingRequest())
 
     # Create agent
     response = await auth_client.post(

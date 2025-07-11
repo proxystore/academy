@@ -38,7 +38,6 @@ from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
 from academy.identifier import EntityId
 from academy.identifier import UserId
-from academy.message import BaseMessage
 from academy.message import Message
 from academy.serialize import NoPickleMixin
 from academy.socket import wait_connection
@@ -162,7 +161,7 @@ class HttpExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             ssl_verify=self._info.ssl_verify,
         )
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         try:
             async with self._session.get(
                 self._message_url,
@@ -181,7 +180,7 @@ class HttpExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 f'Failed to receive response in {timeout} seconds.',
             ) from e
 
-        return BaseMessage.model_from_json(message_raw)
+        return Message.model_validate_json(message_raw)
 
     async def register_agent(
         self,
@@ -200,7 +199,7 @@ class HttpExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             _raise_for_status(response, self.mailbox_id, aid)
         return HttpAgentRegistration(agent_id=aid)
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         async with self._session.put(
             self._message_url,
             json={'message': message.model_dump_json()},

@@ -2,65 +2,64 @@ from __future__ import annotations
 
 import pickle
 from typing import Any
-from typing import get_args
 
 import pytest
 
 from academy.identifier import AgentId
-from academy.identifier import UserId
 from academy.message import ActionRequest
 from academy.message import ActionResponse
-from academy.message import BaseMessage
+from academy.message import ErrorResponse
+from academy.message import Header
 from academy.message import Message
 from academy.message import PingRequest
-from academy.message import PingResponse
-from academy.message import RequestMessage
-from academy.message import ResponseMessage
 from academy.message import ShutdownRequest
-from academy.message import ShutdownResponse
-
-
-def test_shutdown_dest_type() -> None:
-    with pytest.raises(
-        ValueError,
-        match='Destination identifier has the user role.',
-    ):
-        ShutdownRequest(src=AgentId.new(), dest=UserId.new())
-
-
-_src: AgentId[Any] = AgentId.new()
-_dest: AgentId[Any] = AgentId.new()
+from academy.message import SuccessResponse
 
 
 @pytest.mark.parametrize(
-    'message',
+    'message_body',
     (
-        ActionRequest(src=_src, dest=_dest, action='foo', pargs=(b'bar',)),
-        ActionResponse(src=_src, dest=_dest, action='foo', result=b'bar'),
-        ActionResponse(
-            src=_src,
-            dest=_dest,
-            action='foo',
-            exception=Exception(),
-        ),
-        PingRequest(src=_src, dest=_dest),
-        PingResponse(src=_src, dest=_dest),
-        PingResponse(src=_src, dest=_dest, exception=Exception()),
-        ShutdownRequest(src=_src, dest=_dest),
-        ShutdownResponse(src=_src, dest=_dest),
-        ShutdownResponse(src=_src, dest=_dest, exception=Exception()),
+        ActionRequest(action='foo', pargs=(b'bar',)),
+        PingRequest(),
+        ShutdownRequest(),
     ),
 )
-def test_message_representations(message: Message) -> None:
+def test_request_message(message_body: Any) -> None:
+    message = Message.create(
+        src=AgentId.new(),
+        dest=AgentId.new(),
+        body=message_body,
+    )
     assert isinstance(str(message), str)
     assert isinstance(repr(message), str)
     jsoned = message.model_dump_json()
-    recreated = BaseMessage.model_from_json(jsoned)
+    recreated: Message[Any] = Message.model_validate_json(jsoned)
     assert message == recreated
     assert hash(message) == hash(recreated)
     assert message != object()
     pickled = message.model_serialize()
-    recreated = BaseMessage.model_deserialize(pickled)
+    recreated = Message.model_deserialize(pickled)
+    assert message == recreated
+
+
+@pytest.mark.parametrize(
+    'message_body',
+    (
+        ActionResponse(action='foo', result=b'bar'),
+        ErrorResponse(exception=Exception()),
+        SuccessResponse(),
+    ),
+)
+def test_response_message(message_body: Any) -> None:
+    header = Header(src=AgentId.new(), dest=AgentId.new(), kind='response')
+    message: Message[Any] = Message(header=header, body=message_body)
+    assert isinstance(str(message), str)
+    assert isinstance(repr(message), str)
+    jsoned = message.model_dump_json()
+    recreated: Message[Any] = Message.model_validate_json(jsoned)
+    assert message == recreated
+    pickled = message.model_serialize()
+    recreated = Message.model_deserialize(pickled)
     assert message == recreated
 
 
@@ -70,43 +69,27 @@ def test_deserialize_bad_type() -> None:
         TypeError,
         match='Deserialized message is not of type Message.',
     ):
-        BaseMessage.model_deserialize(pickled)
+        Message.model_deserialize(pickled)
 
 
-@pytest.mark.parametrize(
-    'request_',
-    (
-        ActionRequest(src=_src, dest=_dest, action='foo', pargs=(b'bar',)),
-        PingRequest(src=_src, dest=_dest),
-        ShutdownRequest(src=_src, dest=_dest),
-    ),
-)
-def test_create_response_message(request_: RequestMessage) -> None:
-    if isinstance(request_, ActionRequest):
-        assert isinstance(
-            request_.response(result=42),
-            get_args(ResponseMessage),
-        )
-    else:
-        assert isinstance(request_.response(), get_args(ResponseMessage))
-
-    exception = Exception('foo')
-    response = request_.error(exception)
-    assert isinstance(response, get_args(ResponseMessage))
-    assert response.exception == exception
+def tests_create_response_from_response_error() -> None:
+    message = Message.create(
+        src=AgentId.new(),
+        dest=AgentId.new(),
+        body=SuccessResponse(),
+    )
+    with pytest.raises(
+        ValueError,
+        match='Cannot create response header from another response',
+    ):
+        message.create_response(SuccessResponse())
 
 
 def test_action_request_lazy_deserialize() -> None:
-    request = ActionRequest(
-        src=_src,
-        dest=_dest,
-        action='foo',
-        pargs=('bar',),
-        kargs={'foo': 'bar'},
-    )
+    request = ActionRequest(action='foo', pargs=('bar',), kargs={'foo': 'bar'})
 
     json = request.model_dump_json()
-    reconstructed = BaseMessage.model_from_json(json)
+    reconstructed = ActionRequest.model_validate_json(json)
 
     assert isinstance(reconstructed, ActionRequest)
     assert isinstance(reconstructed.pargs, str)
@@ -120,15 +103,10 @@ def test_action_request_lazy_deserialize() -> None:
 
 
 def test_action_response_lazy_deserialize() -> None:
-    response = ActionResponse(
-        src=_src,
-        dest=_dest,
-        action='foo',
-        result={'foo': 'bar'},
-    )
+    response = ActionResponse(action='foo', result={'foo': 'bar'})
 
     json = response.model_dump_json()
-    reconstructed = BaseMessage.model_from_json(json)
+    reconstructed = ActionResponse.model_validate_json(json)
 
     assert isinstance(reconstructed, ActionResponse)
     assert isinstance(reconstructed.result, list)
@@ -138,22 +116,15 @@ def test_action_response_lazy_deserialize() -> None:
     assert isinstance(reconstructed.result, dict)
 
 
-@pytest.mark.parametrize(
-    'response',
-    (
-        ActionResponse(
-            src=_src,
-            dest=_dest,
-            action='foo',
-            exception=Exception(),
-        ),
-        PingResponse(src=_src, dest=_dest, exception=Exception()),
-        ShutdownResponse(src=_src, dest=_dest, exception=Exception()),
-    ),
-)
-def test_action_response_exception_equality(response: ResponseMessage) -> None:
-    dump = response.model_dump()
-    dump['exception'] = Exception()
-    other = type(response).model_validate(dump)
-    assert response == other
-    assert response != BaseMessage(src=response.src, dest=response.dest)
+def test_error_response_lazy_deserialize() -> None:
+    response = ErrorResponse(exception=Exception('Oops!'))
+
+    json = response.model_dump_json()
+    reconstructed = ErrorResponse.model_validate_json(json)
+
+    assert isinstance(reconstructed, ErrorResponse)
+    assert isinstance(reconstructed.exception, str)
+
+    reconstructed.get_exception()
+
+    assert isinstance(reconstructed.exception, Exception)

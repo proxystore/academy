@@ -34,11 +34,12 @@ from academy.identifier import EntityId
 from academy.identifier import UserId
 from academy.message import ActionRequest
 from academy.message import ActionResponse
+from academy.message import ErrorResponse
+from academy.message import Message
 from academy.message import PingRequest
-from academy.message import PingResponse
-from academy.message import ResponseMessage
+from academy.message import Response
 from academy.message import ShutdownRequest
-from academy.message import ShutdownResponse
+from academy.message import SuccessResponse
 
 if TYPE_CHECKING:
     from academy.agent import AgentT
@@ -147,7 +148,7 @@ class Handle(Protocol[AgentT]):
         This is non-blocking and will only send the message.
 
         Args:
-            terminate: Override the termination agent of the agent defined
+            terminate: Override the termination behavior of the agent defined
                 in the [`RuntimeConfig`][academy.runtime.RuntimeConfig].
 
         Raises:
@@ -321,7 +322,7 @@ class ProxyHandle(Generic[AgentT]):
         This is non-blocking and will only send the message.
 
         Args:
-            terminate: Override the termination agent of the agent defined
+            terminate: Override the termination behavior of the agent defined
                 in the [`RuntimeConfig`][academy.runtime.RuntimeConfig].
 
         Raises:
@@ -482,31 +483,20 @@ class RemoteHandle(Generic[AgentT]):
         """Create an unbound copy of this handle."""
         return UnboundRemoteHandle(self.agent_id)
 
-    async def _process_response(self, response: ResponseMessage) -> None:
-        if isinstance(response, (ActionResponse, PingResponse)):
-            future = self._futures.pop(response.tag)
-            if future.cancelled():
-                return
-            if (
-                isinstance(response, ActionResponse)
-                and response.get_exception() is not None
-            ):
-                assert response.exception is not None  # for type checking
-                future.set_exception(response.exception)
-            elif isinstance(response, ActionResponse):
-                future.set_result(response.get_result())
-            elif (
-                isinstance(response, PingResponse)
-                and response.exception is not None
-            ):  # pragma: no cover
-                future.set_exception(response.exception)
-            elif isinstance(response, PingResponse):
-                future.set_result(None)
-            else:
-                raise AssertionError('Unreachable.')
-        elif isinstance(response, ShutdownResponse):  # pragma: no cover
-            # Shutdown responses are not implemented yet.
-            pass
+    async def _process_response(self, response: Message[Response]) -> None:
+        future = self._futures.pop(response.tag, None)
+        if future is None or future.cancelled():
+            # Response is not associated with any active pending future
+            # so safe to ignore it
+            return
+
+        body = response.get_body()
+        if isinstance(body, ActionResponse):
+            future.set_result(body.get_result())
+        elif isinstance(body, ErrorResponse):
+            future.set_exception(body.exception)
+        elif isinstance(body, SuccessResponse):
+            future.set_result(None)
         else:
             raise AssertionError('Unreachable.')
 
@@ -571,13 +561,11 @@ class RemoteHandle(Generic[AgentT]):
         if self._closed:
             raise HandleClosedError(self.agent_id, self.client_id)
 
-        request = ActionRequest(
+        request = Message.create(
             src=self.client_id,
             dest=self.agent_id,
             label=self.handle_id,
-            action=action,
-            pargs=args,
-            kargs=kwargs,
+            body=ActionRequest(action=action, pargs=args, kargs=kwargs),
         )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[R] = loop.create_future()
@@ -614,10 +602,11 @@ class RemoteHandle(Generic[AgentT]):
         if self._closed:
             raise HandleClosedError(self.agent_id, self.client_id)
 
-        request = PingRequest(
+        request = Message.create(
             src=self.client_id,
             dest=self.agent_id,
             label=self.handle_id,
+            body=PingRequest(),
         )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
@@ -646,7 +635,7 @@ class RemoteHandle(Generic[AgentT]):
         This is non-blocking and will only send the message.
 
         Args:
-            terminate: Override the termination agent of the agent defined
+            terminate: Override the termination behavior of the agent defined
                 in the [`RuntimeConfig`][academy.runtime.RuntimeConfig].
 
         Raises:
@@ -658,11 +647,11 @@ class RemoteHandle(Generic[AgentT]):
         if self._closed:
             raise HandleClosedError(self.agent_id, self.client_id)
 
-        request = ShutdownRequest(
+        request = Message.create(
             src=self.client_id,
             dest=self.agent_id,
             label=self.handle_id,
-            terminate=terminate,
+            body=ShutdownRequest(terminate=terminate),
         )
         await self.exchange.send(request)
         logger.debug(

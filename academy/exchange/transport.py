@@ -6,7 +6,6 @@ import sys
 from collections.abc import Iterable
 from types import TracebackType
 from typing import Any
-from typing import get_args
 from typing import Protocol
 from typing import runtime_checkable
 from typing import TYPE_CHECKING
@@ -22,8 +21,8 @@ from academy.agent import AgentT
 from academy.exception import MailboxTerminatedError
 from academy.identifier import AgentId
 from academy.identifier import EntityId
+from academy.message import ErrorResponse
 from academy.message import Message
-from academy.message import RequestMessage
 
 if TYPE_CHECKING:
     from academy.exchange import ExchangeFactory
@@ -118,7 +117,7 @@ class ExchangeTransport(Protocol[AgentRegistrationT_co]):
         """Get an exchange factory."""
         ...
 
-    async def recv(self, timeout: float | None = None) -> Message:
+    async def recv(self, timeout: float | None = None) -> Message[Any]:
         """Receive the next message sent to the mailbox.
 
         This blocks until the next message is received, there is a timeout, or
@@ -156,7 +155,7 @@ class ExchangeTransport(Protocol[AgentRegistrationT_co]):
         """
         ...
 
-    async def send(self, message: Message) -> None:
+    async def send(self, message: Message[Any]) -> None:
         """Send a message to a mailbox.
 
         Args:
@@ -240,16 +239,16 @@ class ExchangeTransportMixin:
 
 
 async def _respond_pending_requests_on_terminate(
-    messages: Iterable[Message],
+    messages: Iterable[Message[Any]],
     transport: ExchangeTransport[Any],
 ) -> None:
     # Helper function used to parse all pending messages in a mailbox when
     # it is terminated and reply to only request messages with a
     # MailboxTerminatedError.
     for message in messages:
-        if isinstance(message, get_args(RequestMessage)):
+        if message.is_request():
             error = MailboxTerminatedError(transport.mailbox_id)
-            response = message.error(error)
+            response = message.create_response(ErrorResponse(exception=error))
             # If the requester's mailbox was also terminated then they
             # don't need to get a response.
             with contextlib.suppress(MailboxTerminatedError):
