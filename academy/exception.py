@@ -53,6 +53,17 @@ class ForbiddenError(ExchangeError):
     pass
 
 
+class MessageTooLargeError(ExchangeError):
+    """Message payload is too large for exchange.
+
+    If encountering this error, consider using the
+    [`ProxyStoreExchangeTransport`][academy.exchange.ProxyStoreExchangeTransport]
+    class an way to by-pass the exchange for large data.
+    """
+
+    pass
+
+
 class MailboxTerminatedError(ExchangeError):
     """Entity mailbox is terminated and cannot send or receive messages.
 

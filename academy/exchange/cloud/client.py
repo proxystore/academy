@@ -28,10 +28,10 @@ from academy.exception import BadEntityIdError
 from academy.exception import ForbiddenError
 from academy.exception import MailboxTerminatedError
 from academy.exception import UnauthorizedError
+from academy.exchange.cloud.app import _run
+from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.config import ExchangeServingConfig
 from academy.exchange.cloud.login import get_auth_headers
-from academy.exchange.cloud.server import _run
-from academy.exchange.cloud.server import StatusCode
 from academy.exchange.factory import ExchangeFactory
 from academy.exchange.transport import ExchangeTransportMixin
 from academy.exchange.transport import MailboxStatus

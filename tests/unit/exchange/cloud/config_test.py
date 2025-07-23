@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import pathlib
 
+from academy.exchange.cloud.backend import PythonBackend
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.config import ExchangeServingConfig
+from academy.exchange.cloud.config import PythonBackendConfig
+from academy.exchange.cloud.config import RedisBackendConfig
 
 
 def test_auth_config_default() -> None:
     config = ExchangeAuthConfig()
     assert config.method is None
+
+
+def test_python_backend_config() -> None:
+    config = PythonBackendConfig()
+    assert isinstance(config.get_backend(), PythonBackend)
+
+
+def test_redis_backend_config_default() -> None:
+    config = RedisBackendConfig()
+    assert isinstance(config.get_backend(), PythonBackend)
 
 
 def test_read_from_config_file_empty(tmp_path: pathlib.Path) -> None:
@@ -34,6 +47,11 @@ method = "globus"
 
 [auth.kwargs]
 client_id = "ABC"
+
+[backend]
+kind = "redis"
+host = "localhost"
+port = 1234
 """
 
     filepath = tmp_path / 'relay.toml'
@@ -50,3 +68,6 @@ client_id = "ABC"
     assert config.auth.method == 'globus'
     assert config.auth.kwargs['client_id'] == 'ABC'
     assert 'client_secret' not in config.auth.kwargs
+
+    assert isinstance(config.backend, RedisBackendConfig)
+    assert config.backend.port == 1234  # noqa: PLR2004

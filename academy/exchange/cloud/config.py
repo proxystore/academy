@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import abc
 import logging
 import pathlib
 import sys
@@ -21,6 +22,10 @@ else:  # pragma: <3.11 cover
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+
+from academy.exchange.cloud.backend import MailboxBackend
+from academy.exchange.cloud.backend import PythonBackend
+from academy.exchange.cloud.backend import RedisBackend
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     import tomllib
@@ -50,6 +55,55 @@ class ExchangeAuthConfig(BaseModel):
     )
 
 
+class BackendConfig(abc.ABC, BaseModel):
+    """Config for backend of storing messages."""
+
+    @abc.abstractmethod
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        ...
+
+
+class PythonBackendConfig(BackendConfig):
+    """Config for using PythonBackend."""
+
+    kind: Literal['python'] = Field('python', repr=False)
+
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        return PythonBackend()
+
+
+class RedisBackendConfig(BackendConfig):
+    """Config for RedisBackend.
+
+    Attributes:
+        hostname: Redis host
+        port: Redis port
+        kwargs: Any additional args to Redis
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    hostname: str = 'localhost'
+    port: int = 6379
+    message_size_limit_kb: int = 1024
+    kwargs: Dict[str, Any] = Field(  # noqa: UP006
+        default_factory=dict,
+        repr=False,
+    )
+    kind: Literal['redis'] = Field('redis', repr=False)
+
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        return RedisBackend(
+            self.hostname,
+            self.port,
+            message_size_limit_kb=self.message_size_limit_kb,
+            **self.kwargs,
+        )
+
+
 class ExchangeServingConfig(BaseModel):
     """Exchange serving configuration.
 
@@ -69,6 +123,7 @@ class ExchangeServingConfig(BaseModel):
     certfile: Optional[str] = None  # noqa: UP045
     keyfile: Optional[str] = None  # noqa: UP045
     auth: ExchangeAuthConfig = Field(default_factory=ExchangeAuthConfig)
+    backend: BackendConfig = Field(default_factory=PythonBackendConfig)
     log_file: Optional[str] = None  # noqa: UP045
     log_level: Union[int, str] = logging.INFO  # noqa: UP007
 
