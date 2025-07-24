@@ -109,7 +109,7 @@ async def test_server_run_ssl(ssl_context: SSLContextFixture) -> None:
 
 @pytest_asyncio.fixture
 async def cli() -> AsyncGenerator[TestClient[Request, Application]]:
-    app = create_app(PythonBackendConfig())
+    app = create_app()
     async with TestClient(TestServer(app)) as client:
         yield client
 

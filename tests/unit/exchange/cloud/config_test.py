@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 
 from academy.exchange.cloud.backend import PythonBackend
+from academy.exchange.cloud.backend import RedisBackend
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.config import ExchangeServingConfig
 from academy.exchange.cloud.config import PythonBackendConfig
@@ -21,7 +22,7 @@ def test_python_backend_config() -> None:
 
 def test_redis_backend_config_default() -> None:
     config = RedisBackendConfig()
-    assert isinstance(config.get_backend(), PythonBackend)
+    assert isinstance(config.get_backend(), RedisBackend)
 
 
 def test_read_from_config_file_empty(tmp_path: pathlib.Path) -> None:
@@ -50,7 +51,7 @@ client_id = "ABC"
 
 [backend]
 kind = "redis"
-host = "localhost"
+hostname = "localhost"
 port = 1234
 """
 

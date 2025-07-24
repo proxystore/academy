@@ -11,6 +11,7 @@ from typing import BinaryIO
 from typing import Dict  # noqa: UP035
 from typing import Literal
 from typing import Optional
+from typing import Protocol
 from typing import TypeVar
 from typing import Union
 
@@ -55,7 +56,7 @@ class ExchangeAuthConfig(BaseModel):
     )
 
 
-class BackendConfig(abc.ABC, BaseModel):
+class BackendConfig(Protocol):
     """Config for backend of storing messages."""
 
     @abc.abstractmethod
@@ -64,17 +65,19 @@ class BackendConfig(abc.ABC, BaseModel):
         ...
 
 
-class PythonBackendConfig(BackendConfig):
+class PythonBackendConfig(BaseModel):
     """Config for using PythonBackend."""
 
-    kind: Literal['python'] = Field('python', repr=False)
+    model_config = ConfigDict(extra='forbid')
+
+    kind: Literal['python'] = Field(default='python', repr=False)
 
     def get_backend(self) -> MailboxBackend:
         """Construct an instance of the backend from the config."""
         return PythonBackend()
 
 
-class RedisBackendConfig(BackendConfig):
+class RedisBackendConfig(BaseModel):
     """Config for RedisBackend.
 
     Attributes:
@@ -92,7 +95,7 @@ class RedisBackendConfig(BackendConfig):
         default_factory=dict,
         repr=False,
     )
-    kind: Literal['redis'] = Field('redis', repr=False)
+    kind: Literal['redis'] = Field(default='redis', repr=False)
 
     def get_backend(self) -> MailboxBackend:
         """Construct an instance of the backend from the config."""
@@ -102,6 +105,9 @@ class RedisBackendConfig(BackendConfig):
             message_size_limit_kb=self.message_size_limit_kb,
             **self.kwargs,
         )
+
+
+BackendConfigT = Union[PythonBackendConfig, RedisBackendConfig]
 
 
 class ExchangeServingConfig(BaseModel):
@@ -123,7 +129,7 @@ class ExchangeServingConfig(BaseModel):
     certfile: Optional[str] = None  # noqa: UP045
     keyfile: Optional[str] = None  # noqa: UP045
     auth: ExchangeAuthConfig = Field(default_factory=ExchangeAuthConfig)
-    backend: BackendConfig = Field(default_factory=PythonBackendConfig)
+    backend: BackendConfigT = Field(default_factory=PythonBackendConfig)
     log_file: Optional[str] = None  # noqa: UP045
     log_level: Union[int, str] = logging.INFO  # noqa: UP007
 
@@ -138,7 +144,7 @@ class ExchangeServingConfig(BaseModel):
             ```
 
             ```python
-            from academy.exchange.cloud.config import ExchangeServingConfig
+            from academy_exchange.config import ExchangeServingConfig
 
             config = ExchangeServingConfig.from_toml('exchange.toml')
             ```
@@ -168,7 +174,7 @@ class ExchangeServingConfig(BaseModel):
             ```
 
             ```python
-            from academy.exchange.cloud.config import ExchangeServingConfig
+            from academy_exchange.config import ExchangeServingConfig
 
             config = ExchangeServingConfig.from_config('relay.toml')
             assert config.certfile == '/path/to/cert.pem'
@@ -203,4 +209,4 @@ def loads(model: type[BaseModelT], data: str) -> BaseModelT:
         Model initialized from TOML file.
     """
     data_dict = tomllib.loads(data)
-    return model.model_validate(data_dict, strict=True)
+    return model.model_validate(data_dict)

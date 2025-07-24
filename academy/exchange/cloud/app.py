@@ -58,6 +58,7 @@ from academy.exception import UnauthorizedError
 from academy.exchange.cloud.authenticate import Authenticator
 from academy.exchange.cloud.authenticate import get_authenticator
 from academy.exchange.cloud.backend import MailboxBackend
+from academy.exchange.cloud.backend import PythonBackend
 from academy.exchange.cloud.config import BackendConfig
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.config import ExchangeServingConfig
@@ -334,16 +335,20 @@ def authenticate_factory(
 
 
 def create_app(
-    backend_config: BackendConfig,
+    backend_config: BackendConfig | None = None,
     auth_config: ExchangeAuthConfig | None = None,
 ) -> Application:
     """Create a new server application."""
+    if backend_config is not None:
+        backend = backend_config.get_backend()
+    else:
+        backend = PythonBackend()
+
     middlewares = []
     if auth_config is not None:
         authenticator = get_authenticator(auth_config)
         middlewares.append(authenticate_factory(authenticator))
 
-    backend = backend_config.get_backend()
     app = Application(middlewares=middlewares)
     app[MANAGER_KEY] = backend
 

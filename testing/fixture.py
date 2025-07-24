@@ -18,7 +18,6 @@ from academy.exchange import LocalExchangeTransport
 from academy.exchange import RedisExchangeFactory
 from academy.exchange import UserExchangeClient
 from academy.exchange.cloud.app import create_app
-from academy.exchange.cloud.config import PythonBackendConfig
 from academy.manager import Manager
 from academy.socket import open_port
 
@@ -105,8 +104,7 @@ async def manager(
 @pytest_asyncio.fixture
 async def http_exchange_server() -> AsyncGenerator[tuple[str, int]]:
     host, port = 'localhost', open_port()
-    backend = PythonBackendConfig()
-    app = create_app(backend)
+    app = create_app()
 
     runner = AppRunner(app)
     await runner.setup()
