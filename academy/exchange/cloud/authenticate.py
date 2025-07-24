@@ -14,9 +14,9 @@ import globus_sdk
 from cachetools import cachedmethod
 from cachetools import TTLCache
 
+from academy.exception import ForbiddenError
+from academy.exception import UnauthorizedError
 from academy.exchange.cloud.config import ExchangeAuthConfig
-from academy.exchange.cloud.exceptions import ForbiddenError
-from academy.exchange.cloud.exceptions import UnauthorizedError
 from academy.exchange.cloud.login import AcademyExchangeScopes
 
 

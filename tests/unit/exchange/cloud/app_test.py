@@ -15,19 +15,15 @@ from aiohttp.test_utils import TestServer
 from aiohttp.web import Application
 from aiohttp.web import Request
 
-from academy.exception import BadEntityIdError
-from academy.exception import MailboxTerminatedError
 from academy.exchange import HttpExchangeFactory
-from academy.exchange import MailboxStatus
+from academy.exchange.cloud.app import _main
+from academy.exchange.cloud.app import _run
+from academy.exchange.cloud.app import create_app
+from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.config import ExchangeServingConfig
-from academy.exchange.cloud.exceptions import ForbiddenError
+from academy.exchange.cloud.config import PythonBackendConfig
 from academy.exchange.cloud.login import AcademyExchangeScopes
-from academy.exchange.cloud.server import _MailboxManager
-from academy.exchange.cloud.server import _main
-from academy.exchange.cloud.server import _run
-from academy.exchange.cloud.server import create_app
-from academy.exchange.cloud.server import StatusCode
 from academy.identifier import AgentId
 from academy.identifier import UserId
 from academy.message import Message
@@ -57,7 +53,7 @@ client_id = "ABC"
     with open(filepath, 'w') as f:
         f.write(data)
 
-    with mock.patch('academy.exchange.cloud.server._run'):
+    with mock.patch('academy.exchange.cloud.app._run'):
         assert _main(['--config', str(filepath)]) == 0
 
 
@@ -109,78 +105,6 @@ async def test_server_run_ssl(ssl_context: SSLContextFixture) -> None:
     process.terminate()
     process.join()
     assert process.exitcode == 0
-
-
-@pytest.mark.asyncio
-async def test_mailbox_manager_create_close() -> None:
-    manager = _MailboxManager()
-    user_id = str(uuid.uuid4())
-    uid = UserId.new()
-    # Should do nothing since mailbox doesn't exist
-    await manager.terminate(user_id, uid)
-    assert await manager.check_mailbox(user_id, uid) == MailboxStatus.MISSING
-    manager.create_mailbox(user_id, uid)
-    assert await manager.check_mailbox(user_id, uid) == MailboxStatus.ACTIVE
-    manager.create_mailbox(user_id, uid)  # Idempotent check
-
-    bad_user = str(uuid.uuid4())  # Authentication check
-    with pytest.raises(ForbiddenError):
-        manager.create_mailbox(bad_user, uid)
-    with pytest.raises(ForbiddenError):
-        await manager.check_mailbox(bad_user, uid)
-    with pytest.raises(ForbiddenError):
-        await manager.terminate(bad_user, uid)
-
-    await manager.terminate(user_id, uid)
-    await manager.terminate(user_id, uid)  # Idempotent check
-
-
-@pytest.mark.asyncio
-async def test_mailbox_manager_send_recv() -> None:
-    manager = _MailboxManager()
-    user_id = str(uuid.uuid4())
-    bad_user = str(uuid.uuid4())
-    uid = UserId.new()
-    manager.create_mailbox(user_id, uid)
-
-    message = Message.create(src=uid, dest=uid, body=PingRequest())
-    with pytest.raises(ForbiddenError):
-        await manager.put(bad_user, message)
-    await manager.put(user_id, message)
-
-    with pytest.raises(ForbiddenError):
-        await manager.get(bad_user, uid)
-    assert await manager.get(user_id, uid) == message
-
-    await manager.terminate(user_id, uid)
-
-
-@pytest.mark.asyncio
-async def test_mailbox_manager_bad_identifier() -> None:
-    manager = _MailboxManager()
-    uid = UserId.new()
-    message = Message.create(src=uid, dest=uid, body=PingRequest())
-
-    with pytest.raises(BadEntityIdError):
-        await manager.get(None, uid)
-
-    with pytest.raises(BadEntityIdError):
-        await manager.put(None, message)
-
-
-@pytest.mark.asyncio
-async def test_mailbox_manager_mailbox_closed() -> None:
-    manager = _MailboxManager()
-    uid = UserId.new()
-    manager.create_mailbox(None, uid)
-    await manager.terminate(None, uid)
-    message = Message.create(src=uid, dest=uid, body=PingRequest())
-
-    with pytest.raises(MailboxTerminatedError):
-        await manager.get(None, uid)
-
-    with pytest.raises(MailboxTerminatedError):
-        await manager.put(None, message)
 
 
 @pytest_asyncio.fixture
@@ -259,9 +183,42 @@ async def test_recv_timeout_error(cli) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_mailbox_message_too_large(cli) -> None:
+    aid: AgentId[Any] = AgentId.new()
+    cid = UserId.new()
+    message = Message.create(src=cid, dest=aid, body=PingRequest())
+
+    with mock.patch('sys.getsizeof', return_value=5 * 1024 * 1024):
+        # Create agent
+        response = await cli.post(
+            '/mailbox',
+            json={'mailbox': aid.model_dump_json(), 'agent': 'foo'},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.OKAY.value
+
+        # Create client
+        response = await cli.post(
+            '/mailbox',
+            json={'mailbox': cid.model_dump_json()},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.OKAY.value
+
+        # Send valid message
+        response = await cli.put(
+            '/message',
+            json={'message': message.model_dump_json()},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.TOO_LARGE.value
+
+
+@pytest.mark.asyncio
 async def test_null_auth_client() -> None:
     auth = ExchangeAuthConfig()
-    app = create_app(auth)
+    backend = PythonBackendConfig()
+    app = create_app(backend, auth)
     async with TestClient(TestServer(app)) as client:
         response = await client.get('/message', json={'mailbox': 'foo'})
         assert response.status == StatusCode.BAD_REQUEST.value
@@ -311,11 +268,13 @@ async def auth_client() -> AsyncGenerator[TestClient[Request, Application]]:
         else:
             return inactive
 
+    backend = PythonBackendConfig()
+
     with mock.patch(
         'globus_sdk.ConfidentialAppAuthClient.oauth2_token_introspect',
     ) as mock_token_response:
         mock_token_response.side_effect = authorize
-        app = create_app(auth)
+        app = create_app(backend, auth)
         async with TestClient(TestServer(app)) as client:
             yield client
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import abc
 import logging
 import pathlib
 import sys
@@ -10,6 +11,7 @@ from typing import BinaryIO
 from typing import Dict  # noqa: UP035
 from typing import Literal
 from typing import Optional
+from typing import Protocol
 from typing import TypeVar
 from typing import Union
 
@@ -21,6 +23,10 @@ else:  # pragma: <3.11 cover
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+
+from academy.exchange.cloud.backend import MailboxBackend
+from academy.exchange.cloud.backend import PythonBackend
+from academy.exchange.cloud.backend import RedisBackend
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     import tomllib
@@ -50,6 +56,61 @@ class ExchangeAuthConfig(BaseModel):
     )
 
 
+class BackendConfig(Protocol):
+    """Config for backend of storing messages."""
+
+    @abc.abstractmethod
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        ...
+
+
+class PythonBackendConfig(BaseModel):
+    """Config for using PythonBackend."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    message_size_limit_kb: int = 1024
+    kind: Literal['python'] = Field(default='python', repr=False)
+
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        return PythonBackend()
+
+
+class RedisBackendConfig(BaseModel):
+    """Config for RedisBackend.
+
+    Attributes:
+        hostname: Redis host
+        port: Redis port
+        kwargs: Any additional args to Redis
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    hostname: str = 'localhost'
+    port: int = 6379
+    message_size_limit_kb: int = 1024
+    kwargs: Dict[str, Any] = Field(  # noqa: UP006
+        default_factory=dict,
+        repr=False,
+    )
+    kind: Literal['redis'] = Field(default='redis', repr=False)
+
+    def get_backend(self) -> MailboxBackend:
+        """Construct an instance of the backend from the config."""
+        return RedisBackend(
+            self.hostname,
+            self.port,
+            message_size_limit_kb=self.message_size_limit_kb,
+            **self.kwargs,
+        )
+
+
+BackendConfigT = Union[PythonBackendConfig, RedisBackendConfig]
+
+
 class ExchangeServingConfig(BaseModel):
     """Exchange serving configuration.
 
@@ -69,6 +130,7 @@ class ExchangeServingConfig(BaseModel):
     certfile: Optional[str] = None  # noqa: UP045
     keyfile: Optional[str] = None  # noqa: UP045
     auth: ExchangeAuthConfig = Field(default_factory=ExchangeAuthConfig)
+    backend: BackendConfigT = Field(default_factory=PythonBackendConfig)
     log_file: Optional[str] = None  # noqa: UP045
     log_level: Union[int, str] = logging.INFO  # noqa: UP007
 
@@ -83,7 +145,7 @@ class ExchangeServingConfig(BaseModel):
             ```
 
             ```python
-            from academy.exchange.cloud.config import ExchangeServingConfig
+            from academy_exchange.config import ExchangeServingConfig
 
             config = ExchangeServingConfig.from_toml('exchange.toml')
             ```
@@ -113,7 +175,7 @@ class ExchangeServingConfig(BaseModel):
             ```
 
             ```python
-            from academy.exchange.cloud.config import ExchangeServingConfig
+            from academy_exchange.config import ExchangeServingConfig
 
             config = ExchangeServingConfig.from_config('relay.toml')
             assert config.certfile == '/path/to/cert.pem'
@@ -148,4 +210,4 @@ def loads(model: type[BaseModelT], data: str) -> BaseModelT:
         Model initialized from TOML file.
     """
     data_dict = tomllib.loads(data)
-    return model.model_validate(data_dict, strict=True)
+    return model.model_validate(data_dict)

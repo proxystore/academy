@@ -7,13 +7,13 @@ from unittest import mock
 
 import pytest
 
+from academy.exception import ForbiddenError
+from academy.exception import UnauthorizedError
 from academy.exchange.cloud.authenticate import get_authenticator
 from academy.exchange.cloud.authenticate import get_token_from_headers
 from academy.exchange.cloud.authenticate import GlobusAuthenticator
 from academy.exchange.cloud.authenticate import NullAuthenticator
 from academy.exchange.cloud.config import ExchangeAuthConfig
-from academy.exchange.cloud.exceptions import ForbiddenError
-from academy.exchange.cloud.exceptions import UnauthorizedError
 
 
 @pytest.mark.asyncio

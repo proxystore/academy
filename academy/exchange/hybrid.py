@@ -369,7 +369,9 @@ class HybridExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         await self._redis_client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)  # type: ignore[misc]
 
         messages: list[Message[Any]] = [
-            Message.model_deserialize(raw) for raw in pending
+            Message.model_deserialize(raw)
+            for raw in pending
+            if raw != _CLOSE_SENTINEL
         ]
         await _respond_pending_requests_on_terminate(messages, self)
 

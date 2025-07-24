@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import pickle
 
@@ -207,7 +208,7 @@ async def test_client_handle_log_bad_response(
         )
         assert await handle.ping() > 0
         await handle.shutdown()
-
+        await asyncio.sleep(0.1)  # Wait for logs to be written
     assert 'no corresponding handle exists' in caplog.text
 
 

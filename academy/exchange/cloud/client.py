@@ -28,10 +28,10 @@ from academy.exception import BadEntityIdError
 from academy.exception import ForbiddenError
 from academy.exception import MailboxTerminatedError
 from academy.exception import UnauthorizedError
+from academy.exchange.cloud.app import _run
+from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.config import ExchangeServingConfig
 from academy.exchange.cloud.login import get_auth_headers
-from academy.exchange.cloud.server import _run
-from academy.exchange.cloud.server import StatusCode
 from academy.exchange.factory import ExchangeFactory
 from academy.exchange.transport import ExchangeTransportMixin
 from academy.exchange.transport import MailboxStatus
@@ -327,11 +327,9 @@ def spawn_http_exchange(
     Returns:
         Exchange interface connected to the spawned exchange.
     """
-    # Fork is not safe in multi-threaded context.
-    multiprocessing.set_start_method('spawn')
-
     config = ExchangeServingConfig(host=host, port=port, log_level=level)
-    exchange_process = multiprocessing.Process(
+    context = multiprocessing.get_context('spawn')
+    exchange_process = context.Process(
         target=_run,
         args=(config,),
     )

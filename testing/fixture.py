@@ -17,7 +17,7 @@ from academy.exchange import LocalExchangeFactory
 from academy.exchange import LocalExchangeTransport
 from academy.exchange import RedisExchangeFactory
 from academy.exchange import UserExchangeClient
-from academy.exchange.cloud.server import create_app
+from academy.exchange.cloud.app import create_app
 from academy.manager import Manager
 from academy.socket import open_port
 

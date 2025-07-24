@@ -13,9 +13,9 @@ from academy.exception import MailboxTerminatedError
 from academy.exception import UnauthorizedError
 from academy.exchange import HttpExchangeFactory
 from academy.exchange import HttpExchangeTransport
+from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.client import _raise_for_status
 from academy.exchange.cloud.client import spawn_http_exchange
-from academy.exchange.cloud.server import StatusCode
 from academy.identifier import UserId
 from academy.socket import open_port
 from testing.constant import TEST_CONNECTION_TIMEOUT
