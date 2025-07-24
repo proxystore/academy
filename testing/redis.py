@@ -67,6 +67,7 @@ class MockRedis:
         items = self.lists.get(key, None)
         if items is None:
             return []
+        end = end + 1 if end >= 0 else len(items) + end + 1
         return items[start:end]
 
     async def ping(self, **kwargs) -> None:

@@ -344,6 +344,12 @@ class PythonBackend:
             return await asyncio.wait_for(queue.get(), timeout=timeout)
         except QueueShutDown:
             raise MailboxTerminatedError(uid) from None
+        except asyncio.TimeoutError:
+            # In Python 3.10 and older, asyncio.TimeoutError and TimeoutError
+            # are different error types.
+            raise TimeoutError(
+                f'No message retrieved within {timeout} seconds.',
+            ) from None
 
     async def put(self, client: str | None, message: Message[Any]) -> None:
         """Put a message in a mailbox.
@@ -550,10 +556,11 @@ class RedisBackend:
         if isinstance(uid, AgentId):
             await self._client.delete(self._agent_key(uid))
 
-        messages: list[Message[Any]] = [
-            Message.model_deserialize(raw) for raw in pending
-        ]
-        for message in messages:
+        for raw in pending:
+            if raw == _CLOSE_SENTINEL:
+                break
+
+            message: Message[Any] = Message.model_deserialize(raw)
             if message.is_request():
                 error = MailboxTerminatedError(uid)
                 body = ErrorResponse(exception=error)

@@ -244,7 +244,9 @@ class RedisExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             await self._client.delete(self._agent_key(uid))
 
         messages: list[Message[Any]] = [
-            Message.model_deserialize(raw) for raw in pending
+            Message.model_deserialize(raw)
+            for raw in pending
+            if raw != _CLOSE_SENTINEL
         ]
         await _respond_pending_requests_on_terminate(messages, self)
 

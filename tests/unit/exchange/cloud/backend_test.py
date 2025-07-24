@@ -17,6 +17,7 @@ from academy.exchange.cloud.backend import PythonBackend
 from academy.exchange.cloud.backend import RedisBackend
 from academy.identifier import AgentId
 from academy.identifier import UserId
+from academy.message import ErrorResponse
 from academy.message import Message
 from academy.message import PingRequest
 
@@ -115,13 +116,11 @@ async def test_mailbox_backend_mailbox_delete_agent(
 
     message = Message.create(src=uid, dest=aid, body=PingRequest())
     await backend.put(None, message)
-    assert await backend.get(None, aid) == message
-    await backend.put(None, message)
     await backend.terminate(None, aid)
 
-    # response = await backend.get(None, uid)
-    # assert isinstance(response.body, ErrorResponse)
-    # assert isinstance(response.body.exception, MailboxTerminatedError)
+    response = await backend.get(None, uid, timeout=0.01)
+    assert isinstance(response.body, ErrorResponse)
+    assert isinstance(response.body.exception, MailboxTerminatedError)
 
 
 @pytest.mark.asyncio
