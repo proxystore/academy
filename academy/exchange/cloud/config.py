@@ -70,6 +70,7 @@ class PythonBackendConfig(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    message_size_limit_kb: int = 1024
     kind: Literal['python'] = Field(default='python', repr=False)
 
     def get_backend(self) -> MailboxBackend:

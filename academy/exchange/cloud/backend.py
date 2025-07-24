@@ -37,6 +37,8 @@ from academy.message import Message
 
 logger = logging.getLogger(__name__)
 
+KB_TO_BYTES = 1024
+
 
 class MailboxBackend(Protocol):
     """Backend protocol for storing mailboxes on server."""
@@ -126,7 +128,7 @@ class MailboxBackend(Protocol):
             client: Client making the request.
             uid: Mailbox id to get messages.
             timeout: Time in seconds to wait for message.
-                If None, return immediately.
+                If None, wait indefinitely.
 
         Raises:
             ForbiddenError: If the client does not have the right permissions.
@@ -154,14 +156,22 @@ class MailboxBackend(Protocol):
 
 
 class PythonBackend:
-    """Mailbox backend using in-memory python data structures."""
+    """Mailbox backend using in-memory python data structures.
 
-    def __init__(self) -> None:
+    Args:
+        message_size_limit_kb: Maximum message size to allow.
+    """
+
+    def __init__(
+        self,
+        message_size_limit_kb: int = 1024,
+    ) -> None:
         self._owners: dict[EntityId, str | None] = {}
         self._mailboxes: dict[EntityId, AsyncQueue[Message[Any]]] = {}
         self._terminated: set[EntityId] = set()
         self._agents: dict[AgentId[Any], tuple[str, ...]] = {}
         self._locks: dict[EntityId, asyncio.Lock] = {}
+        self.message_size_limit = message_size_limit_kb * KB_TO_BYTES
 
     def _has_permissions(
         self,
@@ -313,7 +323,7 @@ class PythonBackend:
             client: Client making the request.
             uid: Mailbox id to get messages.
             timeout: Time in seconds to wait for message.
-                If None, return immediately.
+                If None, wait indefinitely.
 
         Raises:
             ForbiddenError: If the client does not have the right permissions.
@@ -354,6 +364,9 @@ class PythonBackend:
                 'Client does not have correct permissions.',
             )
 
+        if sys.getsizeof(message.body) > self.message_size_limit:
+            raise MessageTooLargeError()
+
         try:
             queue = self._mailboxes[message.dest]
         except KeyError as e:
@@ -382,7 +395,6 @@ async def _drain_queue(queue: AsyncQueue[Message[Any]]) -> list[Message[Any]]:
 
 
 _CLOSE_SENTINEL = b'<CLOSED>'
-BYTES_TO_KB = 1024
 
 
 class RedisBackend:
@@ -403,12 +415,12 @@ class RedisBackend:
         message_size_limit_kb: int = 1024,
         **kwargs: dict[str, Any],
     ) -> None:
-        self.message_size_limit = message_size_limit_kb * BYTES_TO_KB
+        self.message_size_limit = message_size_limit_kb * KB_TO_BYTES
         self._client = redis.asyncio.Redis(
             host=hostname,
             port=port,
             decode_responses=False,
-            **kwargs,
+            **kwargs,  # pragma: no cover
         )
 
     def _owner_key(self, uid: EntityId) -> str:
@@ -538,7 +550,10 @@ class RedisBackend:
         if isinstance(uid, AgentId):
             await self._client.delete(self._agent_key(uid))
 
-        for message in pending:
+        messages: list[Message[Any]] = [
+            Message.model_deserialize(raw) for raw in pending
+        ]
+        for message in messages:
             if message.is_request():
                 error = MailboxTerminatedError(uid)
                 body = ErrorResponse(exception=error)
@@ -592,7 +607,7 @@ class RedisBackend:
             client: Client making the request.
             uid: Mailbox id to get messages.
             timeout: Time in seconds to wait for message.
-                If None, return immediately.
+                If None, wait indefinitely.
 
         Raises:
             ForbiddenError: If the client does not have the right permissions.

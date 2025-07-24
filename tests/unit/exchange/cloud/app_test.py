@@ -183,6 +183,38 @@ async def test_recv_timeout_error(cli) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_mailbox_message_too_large(cli) -> None:
+    aid: AgentId[Any] = AgentId.new()
+    cid = UserId.new()
+    message = Message.create(src=cid, dest=aid, body=PingRequest())
+
+    with mock.patch('sys.getsizeof', return_value=5 * 1024 * 1024):
+        # Create agent
+        response = await cli.post(
+            '/mailbox',
+            json={'mailbox': aid.model_dump_json(), 'agent': 'foo'},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.OKAY.value
+
+        # Create client
+        response = await cli.post(
+            '/mailbox',
+            json={'mailbox': cid.model_dump_json()},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.OKAY.value
+
+        # Send valid message
+        response = await cli.put(
+            '/message',
+            json={'message': message.model_dump_json()},
+            headers={'Authorization': 'Bearer user_1'},
+        )
+        assert response.status == StatusCode.TOO_LARGE.value
+
+
+@pytest.mark.asyncio
 async def test_null_auth_client() -> None:
     auth = ExchangeAuthConfig()
     backend = PythonBackendConfig()
