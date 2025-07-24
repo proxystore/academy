@@ -20,7 +20,6 @@ with HttpExchangeFactory(
 from __future__ import annotations
 
 import argparse
-import asyncio
 import enum
 import logging
 import ssl
@@ -275,7 +274,7 @@ async def _recv_message_route(request: Request) -> Response:  # noqa: PLR0911
             status=StatusCode.FORBIDDEN.value,
             text='Incorrect permissions',
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return Response(
             status=StatusCode.TIMEOUT.value,
             text='Request timeout',
