@@ -20,6 +20,7 @@ from academy.identifier import UserId
 from academy.message import ErrorResponse
 from academy.message import Message
 from academy.message import PingRequest
+from academy.message import SuccessResponse
 
 BACKEND_TYPES = (PythonBackend, RedisBackend)
 
@@ -114,13 +115,18 @@ async def test_mailbox_backend_mailbox_delete_agent(
     await backend.create_mailbox(None, uid)
     await backend.create_mailbox(None, aid, ('EmptyAgent',))
 
-    message = Message.create(src=uid, dest=aid, body=PingRequest())
-    await backend.put(None, message)
+    request = Message.create(src=uid, dest=aid, body=PingRequest())
+    await backend.put(None, request)
+    response = Message.create(src=uid, dest=aid, body=SuccessResponse())
+    await backend.put(None, response)
     await backend.terminate(None, aid)
 
-    response = await backend.get(None, uid, timeout=0.01)
-    assert isinstance(response.body, ErrorResponse)
-    assert isinstance(response.body.exception, MailboxTerminatedError)
+    message = await backend.get(None, uid, timeout=0.01)
+    assert isinstance(message.get_body(), ErrorResponse)
+    assert isinstance(message.body.exception, MailboxTerminatedError)
+
+    with pytest.raises(TimeoutError):
+        await backend.get(None, uid, timeout=0.01)
 
 
 @pytest.mark.asyncio
