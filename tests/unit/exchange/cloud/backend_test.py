@@ -182,10 +182,12 @@ async def test_redis_backend_message_size(mock_redis) -> None:
 async def test_redis_backend_gravestone_expire(mock_redis) -> None:
     backend = RedisBackend(gravestone_expiration_s=1)
     user_id = str(uuid.uuid4())
-    uid = UserId.new()
-    await backend.create_mailbox(user_id, uid)
+    uid: AgentId[Any] = AgentId.new()
+    await backend.create_mailbox(user_id, uid, ('EmptyAgent',))
     await asyncio.sleep(2)
     assert await backend.check_mailbox(user_id, uid) == MailboxStatus.MISSING
+    agents = await backend.discover(user_id, 'EmptyAgent', True)
+    assert len(agents) == 0
 
     # Mailbox does not expire because of get call
     await backend.create_mailbox(user_id, uid)

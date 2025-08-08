@@ -432,7 +432,7 @@ class RedisBackend:
             host=hostname,
             port=port,
             decode_responses=False,
-            **kwargs,  # type: ignore # pragma: no cover
+            **kwargs,  # pragma: no cover
         )
         self.mailbox_expiration_s = mailbox_expiration_s
         self.gravestone_expiration_s = gravestone_expiration_s
@@ -590,19 +590,16 @@ class RedisBackend:
             self._queue_key(uid),
             0,
             -1,
-        )  # type: ignore
+        )
         await self._client.delete(self._queue_key(uid))
         # Sending a close sentinel to the queue is a quick way to force
         # the entity waiting on messages to the mailbox to stop blocking.
         # This assumes that only one entity is reading from the mailbox.
-        await self._client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)  # type: ignore
+        await self._client.rpush(self._queue_key(uid), _CLOSE_SENTINEL)
         if isinstance(uid, AgentId):
             await self._client.delete(self._agent_key(uid))
 
         for raw in pending:
-            if raw == _CLOSE_SENTINEL:
-                break
-
             message: Message[Any] = Message.model_deserialize(raw)
             if message.is_request():
                 error = MailboxTerminatedError(uid)
@@ -689,7 +686,7 @@ class RedisBackend:
         raw: list[bytes] = await self._client.blpop(
             [self._queue_key(uid)],
             timeout=_timeout,
-        )  # type: ignore
+        )
         if raw is None:
             raise TimeoutError(
                 f'Timeout waiting for next message for {uid} '
@@ -737,7 +734,7 @@ class RedisBackend:
         await self._client.rpush(
             self._queue_key(message.dest),
             serialized,
-        )  # type: ignore
+        )
 
         if self.mailbox_expiration_s:
             await self._client.expire(
