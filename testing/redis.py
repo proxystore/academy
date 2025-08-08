@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import logging
 from collections import defaultdict
 from collections.abc import AsyncGenerator
 from collections.abc import Generator
@@ -10,12 +11,15 @@ from unittest import mock
 
 import pytest
 
+logger = logging.getLogger(__name__)
+
 
 class MockRedis:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.values: dict[str, str] = {}
         self.lists: dict[str, list[str]] = defaultdict(list)
         self.events: dict[str, asyncio.Event] = defaultdict(asyncio.Event)
+        self.timeouts: dict[str, asyncio.Future[Any]] = {}
 
     async def aclose(self) -> None:
         pass
@@ -52,6 +56,36 @@ class MockRedis:
 
     async def exists(self, key: str) -> bool:  # pragma: no cover
         return key in self.values or key in self.lists
+
+    async def _expire_key(self, key, timeout: int):
+        await asyncio.sleep(timeout)
+        logger.info(f'Key {key} expired.')
+        await self.delete(key)
+        self.events[key].clear()
+        self.timeouts.pop(key, None)
+
+    async def expire(  # noqa: PLR0913
+        self,
+        key: str,
+        time: int,
+        nx: bool = False,
+        xx: bool = False,
+        gt: bool = False,
+        lt: bool = False,
+    ) -> None:
+        if nx and key in self.timeouts:
+            return
+
+        if xx or gt or lt:
+            raise NotImplementedError()
+
+        if key in self.timeouts:
+            self.timeouts[key].cancel()
+            self.timeouts.pop(key, None)
+
+        self.timeouts[key] = asyncio.ensure_future(
+            self._expire_key(key, time),
+        )
 
     async def get(
         self,

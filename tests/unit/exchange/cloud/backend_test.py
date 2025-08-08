@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -175,3 +176,58 @@ async def test_redis_backend_message_size(mock_redis) -> None:
     message = Message.create(src=uid, dest=uid, body=PingRequest())
     with pytest.raises(MessageTooLargeError):
         await backend.put(None, message)
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_gravestone_expire(mock_redis) -> None:
+    backend = RedisBackend(gravestone_expiration_s=1)
+    user_id = str(uuid.uuid4())
+    uid = UserId.new()
+    await backend.create_mailbox(user_id, uid)
+    await asyncio.sleep(2)
+    assert await backend.check_mailbox(user_id, uid) == MailboxStatus.MISSING
+
+    # Mailbox does not expire because of get call
+    await backend.create_mailbox(user_id, uid)
+    message = Message.create(src=uid, dest=uid, body=PingRequest())
+    await backend.put(user_id, message)
+    await asyncio.sleep(0.5)
+    assert await backend.get(user_id, uid) == message
+    await asyncio.sleep(0.5)
+    assert await backend.check_mailbox(user_id, uid) == MailboxStatus.ACTIVE
+
+    await backend.terminate(user_id, uid)
+    assert (
+        await backend.check_mailbox(user_id, uid) == MailboxStatus.TERMINATED
+    )
+    await asyncio.sleep(2)
+    assert await backend.check_mailbox(user_id, uid) == MailboxStatus.MISSING
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_mailbox_expire(mock_redis) -> None:
+    backend = RedisBackend(mailbox_expiration_s=1)
+    user_id = str(uuid.uuid4())
+    uid = UserId.new()
+    await backend.create_mailbox(user_id, uid)
+    message = Message.create(src=uid, dest=uid, body=PingRequest())
+
+    # Message expires after 2 seconds
+    await backend.put(user_id, message)
+    await asyncio.sleep(2)
+    with pytest.raises(TimeoutError):
+        await backend.get(user_id, uid, timeout=0.01)
+
+    # Get extends expiration
+    await backend.put(user_id, message)
+    await backend.put(user_id, message)
+    await backend.put(user_id, message)
+    await asyncio.sleep(0.5)
+    assert await backend.get(user_id, uid) == message
+    await asyncio.sleep(0.5)
+    assert await backend.get(user_id, uid) == message
+    await asyncio.sleep(2)
+    with pytest.raises(TimeoutError):
+        await backend.get(user_id, uid, timeout=0.01)
+
+    await backend.terminate(user_id, uid)

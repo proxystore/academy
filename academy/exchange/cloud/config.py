@@ -92,6 +92,8 @@ class RedisBackendConfig(BaseModel):
     hostname: str = 'localhost'
     port: int = 6379
     message_size_limit_kb: int = Field(default=1024, gt=0, le=1024 * 512)
+    mailbox_expiration_d: float = Field(default=7, gt=0)
+    gravestone_expiration_d: float = Field(default=365, gt=0)
     kwargs: Dict[str, Any] = Field(  # noqa: UP006
         default_factory=dict,
         repr=False,
@@ -104,6 +106,10 @@ class RedisBackendConfig(BaseModel):
             self.hostname,
             self.port,
             message_size_limit_kb=self.message_size_limit_kb,
+            mailbox_expiration_s=int(self.mailbox_expiration_d * 24 * 2600),
+            gravestone_expiration_s=int(
+                self.gravestone_expiration_d * 24 * 3600,
+            ),
             **self.kwargs,
         )
 
