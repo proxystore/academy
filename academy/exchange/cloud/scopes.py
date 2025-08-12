@@ -11,3 +11,5 @@ AcademyExchangeScopes = ScopeBuilder(
     #   17619205-054c-4829-a1a8-f4b6968c76d2
     known_url_scopes=['academy_exchange'],
 )
+
+ACADEMY_EXCHANGE_SCOPE_ID = '17619205-054c-4829-a1a8-f4b6968c76d2'

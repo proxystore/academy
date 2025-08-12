@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from typing import Callable
+import uuid
 
 import pytest
 import pytest_asyncio
@@ -125,7 +126,7 @@ async def get_factory(
             load_response('auth.oauth2_get_dependent_tokens')
             load_response_set('auth.oauth2_client_credentials_tokens')
 
-            return GlobusExchangeFactory()
+            return GlobusExchangeFactory(uuid.uuid4())
         else:
             raise AssertionError('Unsupported factory type.')
 
