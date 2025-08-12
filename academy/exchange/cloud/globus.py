@@ -6,7 +6,11 @@ import dataclasses
 import functools
 import logging
 import sys
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from datetime import timedelta
 from typing import Any
 from typing import ClassVar
 from typing import Generic
@@ -27,15 +31,15 @@ from globus_sdk.exc import GlobusAPIError
 from globus_sdk.gare import GlobusAuthorizationParameters
 from globus_sdk.scopes import AuthScopes
 
+from academy.agent import Agent
 from academy.agent import AgentT
-from academy.behavior import Behavior
-from academy.behavior import BehaviorT
 from academy.exception import BadEntityIdError
 from academy.exception import MailboxTerminatedError
+from academy.exception import UnauthorizedError
 from academy.exchange import ExchangeFactory
+from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.login import get_globus_app
-from academy.exchange.cloud.scopes import AcademyExchangeScopes
-from academy.exchange.cloud.server import StatusCode
+from academy.exchange.cloud.scopes import ACADEMY_EXCHANGE_SCOPE_ID, AcademyExchangeScopes
 from academy.exchange.transport import ExchangeTransportMixin
 from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
@@ -78,16 +82,16 @@ class AcademyGlobusClient(globus_sdk.BaseClient):
 
     def discover(
         self,
-        behavior: type[Behavior],
+        agent: type[Agent],
         *,
         allow_subclasses: bool = True,
     ) -> GlobusHTTPResponse:
-        behavior_str = f'{behavior.__module__}.{behavior.__name__}'
+        agent_str = f'{agent.__module__}.{agent.__name__}'
         return self.request(
             'GET',
             self._discover_url,
             data={
-                'behavior': behavior_str,
+                'agent': agent_str,
                 'allow_subclasses': allow_subclasses,
             },
         )
@@ -108,14 +112,14 @@ class AcademyGlobusClient(globus_sdk.BaseClient):
 
     def register_agent(
         self,
-        agent_id: AgentId[BehaviorT],
-        behavior: type[BehaviorT],
+        agent_id: AgentId[AgentT],
+        agent: type[AgentT],
     ) -> GlobusHTTPResponse:
         return self.post(
             self._mailbox_url,
             data={
                 'mailbox': agent_id.model_dump_json(),
-                'behavior': ','.join(behavior.behavior_mro()),
+                'agent': ','.join(agent._agent_mro()),
             },
         )
 
@@ -188,6 +192,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
     Args:
         mailbox_id: Identifier of the mailbox on the exchange. If there is
             not an id provided, the exchange will create a new client mailbox.
+        project_id: Globus Identifier of project to create agents under.
         app: For user authorization through token retrieval
         authorizer: For service authorization through token retrieval
     """
@@ -196,24 +201,80 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         self,
         mailbox_id: EntityId,
         *,
+        project_id: uuid.UUID,
         app: GlobusApp | None = None,
         authorizer: GlobusAuthorizer | None,
     ) -> None:
         self._mailbox_id = mailbox_id
+        self.project = project_id
+        self.child_clients: list[uuid.UUID] = []
+
+        self.login_time = datetime.min
+        self._app_lock = threading.Lock()
         self._app = app
         self._authorizer = authorizer
+        self._local_data = threading.local()
+        self.executor = ThreadPoolExecutor(
+            thread_name_prefix='exchange-globus-thread',
+        )
 
-        self._client = AcademyGlobusClient(app=app, authorizer=authorizer)
+    @property
+    def exchange_client(self) -> AcademyGlobusClient:
+        """A thread local copy of the Globus AuthClient."""
+        try:
+            return self._local_data.exchange_client
+        except AttributeError:
+            self._local_data.exchange_client = AcademyGlobusClient(
+                app=self._app,
+                authorizer=self._authorizer,
+            )
+            return self._local_data.exchange_client
 
-        # Lazily initialize auth client so auth scopes are not always required.
-        self._auth_client: AuthClient | None = None
-        self.project: str | None = None  # Project for new agents
-        self.child_clients: list[str] = []
+    @property
+    def auth_client(self) -> AuthClient:
+        """A thread local copy of the Globus AuthClient."""
+        try:
+            if self.login_time - datetime.now() < timedelta(minutes=30):
+                return self._local_data.auth_client
+        except AttributeError:
+            pass
+
+        logger.info("Initializing auth client.")
+
+        if self._app is None:
+            raise NotImplementedError(
+                'Launching child agents is\
+                currently not implemented.',
+            )
+
+        with self._app_lock:
+            self._app.add_scope_requirements(
+                {
+                    AuthScopes.resource_server: [
+                        AuthScopes.manage_projects,
+                        AuthScopes.email,
+                    ],
+                },
+            )
+
+            self._app.login(
+                force=True,
+                auth_params=GlobusAuthorizationParameters(prompt='login'),
+            )
+
+        self._local_data.auth_client = AuthClient(
+            app=self._app,
+        )
+        return self._local_data.auth_client
+
+    def _register_client(self) -> None:
+        self.exchange_client.register_client(self.mailbox_id)
 
     @classmethod
     async def new(
         cls,
         *,
+        project_id: uuid.UUID,
         app: GlobusApp | None = None,
         authorizer: GlobusAuthorizer | None = None,
         mailbox_id: EntityId | None = None,
@@ -222,6 +283,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         """Instantiate a new transport.
 
         Args:
+            project_id: Globus Identifier of project to create agents under.
             app: For user authorization through token retrieval
             authorizer: For service authorization through token retrieval
             mailbox_id: Bind the transport to the specific mailbox. If `None`,
@@ -236,55 +298,61 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         loop = asyncio.get_running_loop()
 
         if mailbox_id is None:
-            globus_client = AcademyGlobusClient(app=app, authorizer=authorizer)
             mailbox_id = UserId.new(name=name)
-            await loop.run_in_executor(
-                None,
-                globus_client.register_client,
+            client = cls(
                 mailbox_id,
+                project_id=project_id,
+                app=app,
+                authorizer=authorizer,
+            )
+            await loop.run_in_executor(
+                client.executor,
+                client._register_client,
             )
             logger.info('Registered %s in exchange', mailbox_id)
+            return client
 
-        return cls(mailbox_id, app=app, authorizer=authorizer)
+        return cls(
+            mailbox_id,
+            project_id=project_id,
+            app=app,
+            authorizer=authorizer,
+        )
 
     @property
     def mailbox_id(self) -> EntityId:
         return self._mailbox_id
 
-    async def close(self) -> None:
-        if self.project is None:
-            return
-
-        assert self._auth_client is not None
-        loop = asyncio.get_running_loop()
+    def _clean_up(self) -> None:
         for client_id in self.child_clients:
-            await loop.run_in_executor(
-                None,
-                self._auth_client.delete_client,
-                client_id,
-            )
+            self.auth_client.delete_client(client_id)
 
-        await loop.run_in_executor(
-            None,
-            self._auth_client.delete_project,
-            self.project,
+    async def close(self) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self.executor, self._clean_up)
+
+    def _discover(
+        self,
+        agent: type[Agent],
+        allow_subclasses: bool,
+    ) -> GlobusHTTPResponse:
+        return self.exchange_client.discover(
+            agent,
+            allow_subclasses=allow_subclasses,
         )
-        return
 
     async def discover(
         self,
-        behavior: type[Behavior],
+        agent: type[Agent],
         *,
         allow_subclasses: bool = True,
     ) -> tuple[AgentId[Any], ...]:
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
-            None,
-            functools.partial(
-                self._client.discover,
-                behavior,
-                allow_subclasses=allow_subclasses,
-            ),
+            self.executor,
+            self._discover,
+            agent,
+            allow_subclasses,
         )
 
         agent_ids_str = response['agent_ids']
@@ -292,21 +360,26 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         return tuple(AgentId(uid=uuid.UUID(aid)) for aid in agent_ids)
 
     def factory(self) -> GlobusExchangeFactory:
-        return GlobusExchangeFactory()
+        return GlobusExchangeFactory(self.project)
+
+    def _recv(self, timeout: float | None) -> GlobusHTTPResponse:
+        return self.exchange_client.recv(self.mailbox_id, timeout)
 
     async def recv(self, timeout: float | None = None) -> Message[Any]:
         loop = asyncio.get_running_loop()
         try:
             try:
+                logger.info(f"Receiving message for mailbox {self.mailbox_id}")
                 response = await asyncio.wait_for(
                     loop.run_in_executor(
-                        None,
-                        self._client.recv,
-                        self.mailbox_id,
+                        self.executor,
+                        self._recv,
+                        timeout,
                     ),
                     timeout,
                 )
                 message_raw = response['message']
+                logger.info(f"Received message of length {len(message_raw)}")
             except AcademyAPIError as e:
                 if e.http_status == StatusCode.TERMINATED.value:
                     raise MailboxTerminatedError(self.mailbox_id) from e
@@ -324,126 +397,60 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
 
         return Message.model_validate_json(message_raw)
 
-    async def register_agent(
+    def _create_registration(
         self,
-        behavior: type[BehaviorT],
-        *,
-        name: str | None = None,
-    ) -> GlobusAgentRegistration[BehaviorT]:
-        if self._app is None:
-            raise NotImplementedError(
-                'Launching child agents is\
-                currently not implemented.',
-            )
-
-        loop = asyncio.get_running_loop()
-        if self._auth_client is None:
-            # Need assert because globus_sdk annotations are not tight
-            assert globus_sdk.AuthClient.resource_server is not None
-            auth_scopes = globus_sdk.scopes.scopes_to_scope_list(
-                [AuthScopes.manage_projects, AuthScopes.email],
-            )
-            self._app.add_scope_requirements(
-                {AuthClient.resource_server: auth_scopes},  # type: ignore
-            )
-
-            # Force authentication for managing projects
-            await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self._app.login,
-                    force=True,
-                    auth_params=GlobusAuthorizationParameters(prompt='login'),
-                ),
-            )
-
-            # TODO: Should we create a client as the user or as the service?
-            self._auth_client = AuthClient(
-                app=self._app,
-            )
-            userinfo = self._auth_client.oauth2_userinfo()
-            identity_id = userinfo['sub']
-            email = userinfo['email']
-            project_response = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self._auth_client.create_project,
-                    'Academy Agents',
-                    contact_email=email,
-                    admin_ids=identity_id,
-                ),
-            )
-            self.project = project_response['project']['id']
-
-        assert self.project is not None
-
-        # Create client id
-        aid: AgentId[BehaviorT] = AgentId.new(name=name)
-        client_response = await loop.run_in_executor(
-            None,
-            functools.partial(
-                self._auth_client.create_client,
-                str(aid),
-                project=self.project,
-                client_type='hybrid_confidential_client_resource_server',
-                visibility='private',
-            ),
+        aid: AgentId[AgentT],
+    ) -> GlobusAgentRegistration[AgentT]:
+        # Create new resource server (auth entity)
+        logger.info("Creating new auth client")
+        client_response = self.auth_client.create_client(
+            str(aid),
+            project=self.project,
+            client_type='hybrid_confidential_client_resource_server',
+            visibility='private',
         )
         client_id = client_response['client']['id']
-        self.child_clients.append(client_id)
 
         # Create secret
-        credentials_response = await loop.run_in_executor(
-            None,
-            self._auth_client.create_client_credential,
+        logger.info("Creating secret.")
+        credentials_response = self.auth_client.create_client_credential(
             client_id,
             'Launch Credentials',
         )
         secret = credentials_response['credential']['secret']
 
         # Create scope
-        scope_response = await loop.run_in_executor(
-            None,
-            functools.partial(
-                self._auth_client.create_scope,
-                client_id,
-                'Agent launch',
-                'Launch agent',
-                'launch',
-                dependent_scopes=[
-                    DependentScopeSpec(
-                        '17619205-054c-4829-a1a8-f4b6968c76d2',
-                        optional=False,
-                        requires_refresh_token=True,
-                    ),
-                ],
-                allows_refresh_token=True,
-            ),
+        logger.info("Creating new scope.")
+        scope_response = self.auth_client.create_scope(
+            client_id,
+            'Agent launch',
+            'Launch agent',
+            'launch',
+            dependent_scopes=[
+                DependentScopeSpec(
+                    ACADEMY_EXCHANGE_SCOPE_ID,
+                    optional=False,
+                    requires_refresh_token=True,
+                ),
+            ],
+            allows_refresh_token=True,
         )
         scope = Scope.parse(scope_response['scopes'][0]['scope_string'])
 
         # Create delegated token
+        logger.info("Creating delegated token.")
+        assert self._app is not None  # Already true, but not caught by mypy
         self._app.add_scope_requirements(
             {client_id: [scope]},
         )
-        # TODO: This may issues a request, but putting it inside an executor
-        # causes a race condition.
         authorizer = self._app.get_authorizer(client_id)
-        bearer = await loop.run_in_executor(
-            None,
-            authorizer.get_authorization_header,
-        )
-        assert bearer is not None, 'Unable to get authorization headers.'
+        bearer = authorizer.get_authorization_header()
+        if bearer is None:
+            raise UnauthorizedError('Unable to get authorization headers.')
+
         auth_header_parts = bearer.split(' ')
         token = auth_header_parts[1]
 
-        # Create mailbox
-        await loop.run_in_executor(
-            None,
-            self._client.register_agent,
-            aid,
-            behavior,
-        )
         return GlobusAgentRegistration(
             agent_id=aid,
             client_id=client_id,
@@ -451,13 +458,50 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             secret=secret,
         )
 
-    async def send(self, message: Message[Any]) -> None:
+    def _create_mailbox(
+        self,
+        aid: AgentId[AgentT],
+        agent: type[AgentT],
+    ) -> None:
+        self.exchange_client.register_agent(aid, agent)
+
+    async def register_agent(
+        self,
+        agent: type[AgentT],
+        *,
+        name: str | None = None,
+    ) -> GlobusAgentRegistration[AgentT]:
         loop = asyncio.get_running_loop()
 
+        # Create registration
+        aid: AgentId[AgentT] = AgentId.new(name=name)
+        registration = await loop.run_in_executor(
+            self.executor,
+            self._create_registration,
+            aid,
+        )
+
+        # Create mailbox
+        await loop.run_in_executor(
+            self.executor,
+            self._create_mailbox,
+            aid,
+            agent,
+        )
+
+        self.child_clients.append(registration.client_id)
+
+        return registration
+
+    def _send(self, message: Message[Any]) -> None:
+        self.exchange_client.send(message)
+
+    async def send(self, message: Message[Any]) -> None:
+        loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
-                None,
-                self._client.send,
+                self.executor,
+                self._send,
                 message,
             )
         except AcademyAPIError as e:
@@ -467,28 +511,41 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 raise MailboxTerminatedError(message.dest) from e
             raise e  # pragma: no cover
 
+    def _status(self, uid: EntityId) -> MailboxStatus:
+        response = self.exchange_client.status(uid)
+        status = response['status']
+        return MailboxStatus(status)
+
     async def status(self, uid: EntityId) -> MailboxStatus:
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            self._client.status,
+        return await loop.run_in_executor(
+            self.executor,
+            self._status,
             uid,
         )
 
-        status = response['status']
-        return MailboxStatus(status)
+    def _terminate(self, uid: EntityId) -> None:
+        self.exchange_client.terminate(uid)
 
     async def terminate(self, uid: EntityId) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,
-            self._client.terminate,
+            self.executor,
+            self._terminate,
             uid,
         )
 
 
 class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
-    """Globus exchange client factory."""
+    """Globus exchange client factory.
+
+    Args:
+        project_id: Project to create new clients under. Must be able
+            to authenticate as a administrator.
+    """
+
+    def __init__(self, project_id: uuid.UUID) -> None:
+        self.project = project_id
 
     async def _create_transport(
         self,
@@ -508,12 +565,16 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
                 app=app,
                 mailbox_id=mailbox_id,
                 name=name,
+                project_id=self.project,
             )
         else:
+            logger.info("Initilizing auth client for new agent.")
             auth_client = globus_sdk.ConfidentialAppAuthClient(
                 client_id=registration.client_id,
                 client_secret=registration.secret,
             )
+
+            logger.info("Exchanging dependent token.")
             dependent_token_response = await loop.run_in_executor(
                 None,
                 functools.partial(
@@ -537,4 +598,5 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
                 authorizer=authorizer,
                 mailbox_id=mailbox_id,
                 name=name,
+                project_id=self.project,
             )
