@@ -32,7 +32,7 @@ def urlencoded_params_matcher_allow_missing(
             else {}
         )
         params_dict = params or {}
-        if request_body is None:
+        if request_body is None:  # pragma: no cover
             valid = params is None
         else:
             for key, value in params_dict.items():

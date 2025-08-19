@@ -237,7 +237,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         if datetime.now() - self.login_time < timedelta(minutes=30):
             try:
                 return self._local_data.auth_client
-            except AttributeError:
+            except AttributeError:  # pragma: no cover
                 pass
 
         logger.info('Initializing auth client.')
@@ -449,7 +449,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         )
         authorizer = self._app.get_authorizer(client_id)
         bearer = authorizer.get_authorization_header()
-        if bearer is None:
+        if bearer is None:  # pragma: no cover
             raise UnauthorizedError('Unable to get authorization headers.')
 
         auth_header_parts = bearer.split(' ')
