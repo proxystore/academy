@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import uuid
 from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from typing import Callable
-import uuid
 
 import pytest
 import pytest_asyncio
@@ -30,6 +30,7 @@ from academy.exchange.cloud.login import ACADEMY_GLOBUS_CLIENT_ID_ENV_NAME
 from academy.exchange.cloud.login import ACADEMY_GLOBUS_CLIENT_SECRET_ENV_NAME
 from academy.manager import Manager
 from academy.socket import open_port
+from testing.constant import TEST_PROJECT_ID
 
 
 @pytest_asyncio.fixture
@@ -124,9 +125,10 @@ async def get_factory(
             load_response('auth.create_client_credentials')
             load_response('auth.create_scope')
             load_response('auth.oauth2_get_dependent_tokens')
+            load_response('auth.delete_client')
             load_response_set('auth.oauth2_client_credentials_tokens')
 
-            return GlobusExchangeFactory(uuid.uuid4())
+            return GlobusExchangeFactory(uuid.UUID(TEST_PROJECT_ID))
         else:
             raise AssertionError('Unsupported factory type.')
 

@@ -8,6 +8,7 @@ from globus_sdk._testing.models import ResponseSet
 from globus_sdk._testing.registry import register_response_set
 from responses.matchers import json_params_matcher
 
+from testing.constant import TEST_PROJECT_ID
 from testing.data.auth._common import CLIENT_ID
 
 _COMMON_RESPONSE_RECORD: dict[str, t.Any] = {
@@ -39,7 +40,7 @@ PRIVATE_CLIENT_RESPONSE_RECORD = {
 }
 
 PUBLIC_CLIENT_REQUEST_ARGS = {
-    'project': '6c357d85-dfb2-4f22-8ab3-dc617849aac5',
+    'project': TEST_PROJECT_ID,
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,8 @@ from academy.exception import ForbiddenError
 from academy.exception import UnauthorizedError
 from academy.exchange.cloud.config import ExchangeAuthConfig
 from academy.exchange.cloud.login import AcademyExchangeScopes
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -117,7 +120,10 @@ class GlobusAuthenticator:
         self,
         token: str,
     ) -> globus_sdk.response.GlobusHTTPResponse:
-        return self.auth_client.oauth2_token_introspect(token)
+        response = self.auth_client.oauth2_token_introspect(token)
+        logger.info(f'Authenticated token with globus: {token}.')
+        logger.debug(f'Token introspect response: {response}.')
+        return response
 
     async def authenticate_user(self, headers: Mapping[str, str]) -> str:
         """Authenticate a Globus Auth user from request header.

@@ -39,7 +39,8 @@ from academy.exception import UnauthorizedError
 from academy.exchange import ExchangeFactory
 from academy.exchange.cloud.app import StatusCode
 from academy.exchange.cloud.login import get_globus_app
-from academy.exchange.cloud.scopes import ACADEMY_EXCHANGE_SCOPE_ID, AcademyExchangeScopes
+from academy.exchange.cloud.scopes import ACADEMY_EXCHANGE_SCOPE_ID
+from academy.exchange.cloud.scopes import AcademyExchangeScopes
 from academy.exchange.transport import ExchangeTransportMixin
 from academy.exchange.transport import MailboxStatus
 from academy.identifier import AgentId
@@ -233,13 +234,13 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
     @property
     def auth_client(self) -> AuthClient:
         """A thread local copy of the Globus AuthClient."""
-        try:
-            if self.login_time - datetime.now() < timedelta(minutes=30):
+        if datetime.now() - self.login_time < timedelta(minutes=30):
+            try:
                 return self._local_data.auth_client
-        except AttributeError:
-            pass
+            except AttributeError:
+                pass
 
-        logger.info("Initializing auth client.")
+        logger.info('Initializing auth client.')
 
         if self._app is None:
             raise NotImplementedError(
@@ -261,6 +262,8 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 force=True,
                 auth_params=GlobusAuthorizationParameters(prompt='login'),
             )
+
+            self.login_time = datetime.now()
 
         self._local_data.auth_client = AuthClient(
             app=self._app,
@@ -369,7 +372,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         loop = asyncio.get_running_loop()
         try:
             try:
-                logger.info(f"Receiving message for mailbox {self.mailbox_id}")
+                logger.info(f'Receiving message for mailbox {self.mailbox_id}')
                 response = await asyncio.wait_for(
                     loop.run_in_executor(
                         self.executor,
@@ -379,7 +382,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                     timeout,
                 )
                 message_raw = response['message']
-                logger.info(f"Received message of length {len(message_raw)}")
+                logger.info(f'Received message of length {len(message_raw)}')
             except AcademyAPIError as e:
                 if e.http_status == StatusCode.TERMINATED.value:
                     raise MailboxTerminatedError(self.mailbox_id) from e
@@ -402,7 +405,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         aid: AgentId[AgentT],
     ) -> GlobusAgentRegistration[AgentT]:
         # Create new resource server (auth entity)
-        logger.info("Creating new auth client")
+        logger.info('Creating new auth client')
         client_response = self.auth_client.create_client(
             str(aid),
             project=self.project,
@@ -410,9 +413,10 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             visibility='private',
         )
         client_id = client_response['client']['id']
+        logger.info(f'Created client id: {client_id}')
 
         # Create secret
-        logger.info("Creating secret.")
+        logger.info('Creating secret.')
         credentials_response = self.auth_client.create_client_credential(
             client_id,
             'Launch Credentials',
@@ -420,7 +424,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         secret = credentials_response['credential']['secret']
 
         # Create scope
-        logger.info("Creating new scope.")
+        logger.info('Creating new scope.')
         scope_response = self.auth_client.create_scope(
             client_id,
             'Agent launch',
@@ -438,7 +442,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         scope = Scope.parse(scope_response['scopes'][0]['scope_string'])
 
         # Create delegated token
-        logger.info("Creating delegated token.")
+        logger.info('Creating delegated token.')
         assert self._app is not None  # Already true, but not caught by mypy
         self._app.add_scope_requirements(
             {client_id: [scope]},
@@ -568,13 +572,13 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
                 project_id=self.project,
             )
         else:
-            logger.info("Initilizing auth client for new agent.")
+            logger.info('Initializing auth client for new agent.')
             auth_client = globus_sdk.ConfidentialAppAuthClient(
                 client_id=registration.client_id,
                 client_secret=registration.secret,
             )
 
-            logger.info("Exchanging dependent token.")
+            logger.info('Exchanging dependent token.')
             dependent_token_response = await loop.run_in_executor(
                 None,
                 functools.partial(
