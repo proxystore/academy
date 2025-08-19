@@ -9,3 +9,5 @@ TEST_SLEEP_INTERVAL = 0.001
 TEST_WAIT_TIMEOUT = 1
 
 TEST_ACADEMY_PATH = 'https://exchange.academy.globus.org'
+
+TEST_PROJECT_ID = '6a566149-23b0-4358-9db0-ae8824450dac'

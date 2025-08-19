@@ -11,6 +11,7 @@ import testing.data.academy.terminate
 import testing.data.auth.create_client
 import testing.data.auth.create_client_credentials
 import testing.data.auth.create_scope
+import testing.data.auth.delete_client
 import testing.data.auth.oauth2_client_credentials_tokens
 import testing.data.auth.oauth2_get_dependent_tokens
 from testing.fixture import activate_responses

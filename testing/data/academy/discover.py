@@ -6,11 +6,10 @@ from globus_sdk._testing.registry import register_response_set
 
 from academy.exchange.cloud.globus import AcademyGlobusClient
 from academy.identifier import AgentId
-from testing.constant import TEST_ACADEMY_PATH
 
 RESPONSES = ResponseSet(
     default=RegisteredResponse(
-        path=f'{TEST_ACADEMY_PATH}/discover',
+        path=f'{AcademyGlobusClient.base_url}/discover',
         method='GET',
         json={
             'agent_ids': [

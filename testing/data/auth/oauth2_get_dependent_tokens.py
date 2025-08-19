@@ -26,8 +26,9 @@ RESPONSES = ResponseSet(
             matchers.urlencoded_params_matcher(
                 {
                     'grant_type': 'urn:globus:auth:grant_type:dependent_token',
-                    'token': 'Bearer DUMMY_TRANSFER_TOKEN_FROM_THE_INTERTUBES',
+                    'token': 'DUMMY_TRANSFER_TOKEN_FROM_THE_INTERTUBES',
                     'access_type': 'offline',
+                    'scope': 'https://auth.globus.org/scopes/a7e16357-8edf-414d-9e73-85e4b0b18be4/academy_exchange',
                 },
             ),
         ],

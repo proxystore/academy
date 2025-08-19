@@ -79,7 +79,7 @@ def register_response(
         service='auth',
         method='POST',
         path=f'/v2/api/clients/{request_args["client_id"]}/scopes',
-        json={'scope': response_body},
+        json={'scopes': [response_body]},
         metadata={
             # Test functions use 'args' to form request
             'args': request_args,
@@ -94,8 +94,8 @@ def register_response(
 
 RESPONSES = ResponseSet(
     default=register_response({}),
-    client_id_str=register_response({'client_id': str(uuid.uuid1())}),
-    client_id_uuid=register_response({'client_id': uuid.uuid1()}),
+    client_id_str=register_response({'client_id': CLIENT_ID}),
+    client_id_uuid=register_response({'client_id': uuid.UUID(CLIENT_ID)}),
     name=register_response({'name': str(uuid.uuid4()).replace('-', '')}),
     description=register_response(
         {'description': str(uuid.uuid4()).replace('-', '')},

@@ -9,11 +9,10 @@ from academy.identifier import AgentId
 from academy.identifier import UserId
 from academy.message import Message
 from academy.message import SuccessResponse
-from testing.constant import TEST_ACADEMY_PATH
 
 RESPONSES = ResponseSet(
     default=RegisteredResponse(
-        path=f'{TEST_ACADEMY_PATH}/message',
+        path=f'{AcademyGlobusClient.base_url}/message',
         method='GET',
         json={
             'message': Message.create(
