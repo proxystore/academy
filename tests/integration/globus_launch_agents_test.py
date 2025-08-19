@@ -15,17 +15,17 @@ from academy.manager import Manager
 
 
 class Echo(Agent):
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # pragma: no cover
         super().__init__()
 
     @action
-    async def echo(self, text: str) -> str:
+    async def echo(self, text: str) -> str:  # pragma: no cover
         print('Running action')
         return text
 
 
 @pytest.mark.skip(reason='Responses not mocked sufficiently.')
-async def test_full_globus_exchange_client() -> None:
+async def test_full_globus_exchange_client() -> None:  # pragma: no cover
     """Test the full exchange client.
 
     This test can be used to test the hosted exchange with production
