@@ -51,8 +51,6 @@ from academy.serialize import NoPickleMixin
 
 logger = logging.getLogger(__name__)
 
-ACADEMY_PROJECT = '6c357d85-dfb2-4f22-8ab3-dc617849aac5'
-
 
 class AcademyAPIError(GlobusAPIError):
     """Error class to represent error responses from Academy."""
