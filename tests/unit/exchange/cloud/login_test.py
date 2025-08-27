@@ -39,10 +39,8 @@ def mock_env_credentials() -> Generator[tuple[str, str], None, None]:
 
 
 def test_get_token_storage(tmp_path: pathlib.Path):
-    filepath = tmp_path / 'tokens.db'
-    storage = get_token_storage(filepath)
-    assert filepath.is_file()
-    storage.close()
+    filepath = tmp_path / 'tokens.json'
+    get_token_storage(filepath)
 
 
 def test_get_token_storage_academy_default(tmp_path: pathlib.Path):
@@ -50,10 +48,8 @@ def test_get_token_storage_academy_default(tmp_path: pathlib.Path):
         'ACADEMY_HOME': str(tmp_path),
     }
     with mock.patch.dict(os.environ, env):
-        filepath = tmp_path / 'storage.db'
-        storage = get_token_storage()
-        assert filepath.is_file()
-        storage.close()
+        store = get_token_storage()
+        assert store.filepath == str(tmp_path.joinpath('storage.json'))
 
 
 def test_get_confidential_app_auth_client_from_env(
