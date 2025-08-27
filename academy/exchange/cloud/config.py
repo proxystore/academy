@@ -138,7 +138,7 @@ class ExchangeServingConfig(BaseModel):
     auth: ExchangeAuthConfig = Field(default_factory=ExchangeAuthConfig)
     backend: BackendConfigT = Field(default_factory=PythonBackendConfig)
     log_file: Optional[str] = None  # noqa: UP045
-    log_level: Union[int, str] = logging.DEBUG  # noqa: UP007
+    log_level: Union[int, str] = logging.INFO  # noqa: UP007
 
     @classmethod
     def from_toml(cls, filepath: str | pathlib.Path) -> Self:

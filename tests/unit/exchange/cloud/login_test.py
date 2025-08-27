@@ -48,7 +48,8 @@ def test_get_token_storage_academy_default(tmp_path: pathlib.Path):
         'ACADEMY_HOME': str(tmp_path),
     }
     with mock.patch.dict(os.environ, env):
-        get_token_storage()
+        store = get_token_storage()
+        assert store.filepath == str(tmp_path.joinpath('storage.json'))
 
 
 def test_get_confidential_app_auth_client_from_env(
