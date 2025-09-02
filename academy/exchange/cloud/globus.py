@@ -67,8 +67,7 @@ class AcademyGlobusClient(globus_sdk.BaseClient):
     asyncio.
     """
 
-    # service_name = 'academy'
-    base_url = 'http://0.0.0.0:8700'  # TODO: Get domain
+    base_url = 'http://0.0.0.0:8700'  # TODO: Switch to real exchange
     scopes = AcademyExchangeScopes
     default_scope_requirements: ClassVar[list[Scope]] = [
         Scope(AcademyExchangeScopes.academy_exchange),
@@ -226,6 +225,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             self._local_data.exchange_client = AcademyGlobusClient(
                 app=self._app,
                 authorizer=self._authorizer,
+                transport_params={'http_timeout': -1},
             )
             return self._local_data.exchange_client
 
@@ -236,7 +236,10 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             try:
                 return self._local_data.auth_client
             except AttributeError:  # pragma: no cover
+                logger.debug('Auth client does not exist for thread.')
                 pass
+        else:
+            logger.debug('Auth client login timeout.')
 
         logger.info('Initializing auth client.')
 
