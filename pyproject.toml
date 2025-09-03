@@ -52,6 +52,7 @@ dev = [
     "ruff>=0.2.0",
     "tox",
     "virtualenv",
+    "responses",
 ]
 docs = [
     "black==25.1.0",
@@ -87,6 +88,7 @@ omit = [
     # This module is implicitly tested when running mypy on the
     # package and tests, rather then when pytest is run.
     "academy/mypy_plugin.py",
+    "tests/manual/",
 ]
 parallel = true
 
