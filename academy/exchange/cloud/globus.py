@@ -262,7 +262,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 },
             )
 
-            if login:
+            if login:  # pragma: no branch
                 self._app.login(
                     force=True,
                     auth_params=GlobusAuthorizationParameters(prompt='login'),
