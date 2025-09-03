@@ -67,7 +67,7 @@ class AcademyGlobusClient(globus_sdk.BaseClient):
     asyncio.
     """
 
-    base_url = 'http://0.0.0.0:8700'  # TODO: Switch to real exchange
+    base_url = 'https://exchange.proxystore.dev'
     scopes = AcademyExchangeScopes
     default_scope_requirements: ClassVar[list[Scope]] = [
         Scope(AcademyExchangeScopes.academy_exchange),
@@ -191,8 +191,9 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         mailbox_id: Identifier of the mailbox on the exchange. If there is
             not an id provided, the exchange will create a new client mailbox.
         project_id: Globus Identifier of project to create agents under.
-        app: For user authorization through token retrieval
-        authorizer: For service authorization through token retrieval
+        app: For user authorization through token retrieval.
+        authorizer: For service authorization through token retrieval.
+        client_params: Additional parameters for globus client.
     """
 
     def __init__(
@@ -201,11 +202,13 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         *,
         project_id: uuid.UUID,
         app: GlobusApp | None = None,
-        authorizer: GlobusAuthorizer | None,
+        authorizer: GlobusAuthorizer | None = None,
+        client_params: dict[str, Any] | None = None,
     ) -> None:
         self._mailbox_id = mailbox_id
         self.project = project_id
         self.child_clients: list[uuid.UUID] = []
+        self.client_params = client_params or {}
 
         self.login_time = datetime.min
         self._app_lock = threading.Lock()
@@ -226,6 +229,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 app=self._app,
                 authorizer=self._authorizer,
                 transport_params={'http_timeout': -1},
+                **self.client_params,
             )
             return self._local_data.exchange_client
 
@@ -279,7 +283,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         self.exchange_client.register_client(self.mailbox_id)
 
     @classmethod
-    async def new(
+    async def new(  # noqa: PLR0913
         cls,
         *,
         project_id: uuid.UUID,
@@ -287,6 +291,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         authorizer: GlobusAuthorizer | None = None,
         mailbox_id: EntityId | None = None,
         name: str | None = None,
+        client_params: dict[str, Any] | None = None,
     ) -> Self:
         """Instantiate a new transport.
 
@@ -299,6 +304,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 bound to that mailbox.
             name: Display name of the registered entity if `mailbox_id` is
                 `None`.
+            client_params: Additional parameters for globus client.
 
         Returns:
             An instantiated transport bound to a specific mailbox.
@@ -312,6 +318,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                 project_id=project_id,
                 app=app,
                 authorizer=authorizer,
+                client_params=client_params,
             )
             await loop.run_in_executor(
                 client.executor,
@@ -325,6 +332,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
             project_id=project_id,
             app=app,
             authorizer=authorizer,
+            client_params=client_params,
         )
 
     @property
@@ -368,7 +376,7 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
         return tuple(AgentId(uid=uuid.UUID(aid)) for aid in agent_ids)
 
     def factory(self) -> GlobusExchangeFactory:
-        return GlobusExchangeFactory(self.project)
+        return GlobusExchangeFactory(self.project, self.client_params)
 
     def _recv(self, timeout: float | None) -> GlobusHTTPResponse:
         return self.exchange_client.recv(self.mailbox_id, timeout)
@@ -551,10 +559,16 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
     Args:
         project_id: Project to create new clients under. Must be able
             to authenticate as a administrator.
+        client_params: Additional parameters for globus client.
     """
 
-    def __init__(self, project_id: uuid.UUID) -> None:
+    def __init__(
+        self,
+        project_id: uuid.UUID,
+        client_params: dict[str, Any] | None = None,
+    ) -> None:
         self.project = project_id
+        self.client_params = client_params
 
     async def _create_transport(
         self,
@@ -575,6 +589,7 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
                 mailbox_id=mailbox_id,
                 name=name,
                 project_id=self.project,
+                client_params=self.client_params,
             )
         else:
             logger.info('Initializing auth client for new agent.')
@@ -608,4 +623,5 @@ class GlobusExchangeFactory(ExchangeFactory[GlobusExchangeTransport]):
                 mailbox_id=mailbox_id,
                 name=name,
                 project_id=self.project,
+                client_params=self.client_params,
             )

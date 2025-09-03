@@ -42,6 +42,7 @@ async def test_full_globus_exchange_client() -> None:
 
     factory = GlobusExchangeFactory(
         project_id=uuid.UUID('183dd9a1-b344-44ff-b968-d2a3499f9c65'),
+        client_params={'base_url': 'http://0.0.0.0:8700'},
     )
     mp_context = multiprocessing.get_context('spawn')
     executor = ProcessPoolExecutor(
