@@ -233,12 +233,14 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
     def auth_client(self) -> AuthClient:
         """A thread local copy of the Globus AuthClient."""
         if datetime.now() - self.login_time < timedelta(minutes=30):
+            login = False
             try:
                 return self._local_data.auth_client
             except AttributeError:  # pragma: no cover
                 logger.debug('Auth client does not exist for thread.')
                 pass
         else:
+            login = True
             logger.debug('Auth client login timeout.')
 
         logger.info('Initializing auth client.')
@@ -255,14 +257,16 @@ class GlobusExchangeTransport(ExchangeTransportMixin, NoPickleMixin):
                     AuthScopes.resource_server: [
                         AuthScopes.manage_projects,
                         AuthScopes.email,
+                        AuthScopes.profile,
                     ],
                 },
             )
 
-            self._app.login(
-                force=True,
-                auth_params=GlobusAuthorizationParameters(prompt='login'),
-            )
+            if login:
+                self._app.login(
+                    force=True,
+                    auth_params=GlobusAuthorizationParameters(prompt='login'),
+                )
 
             self.login_time = datetime.now()
 
